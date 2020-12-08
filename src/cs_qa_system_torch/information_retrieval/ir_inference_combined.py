@@ -157,10 +157,12 @@ if __name__ == '__main__':
                                                  'given query in Question Answering system')
     parser.add_argument('--gpu', type=str, default='', help='gpus to run model on')
     parser.add_argument('--output_dir', type=str, default='inference_ir', help='path to inference output')
-    parser.add_argument('--index_top_n', type=int, default=100,
+    parser.add_argument('--index_top_n', type=int, default=50,
                         help='number of relevant passages we want the IR model to return')
     parser.add_argument('--qrels_path', type=str,
                         help='path of the qrels file')
+    parser.add_argument('--test_data_path', type=str,
+                        help='path of the test file')
     parser.add_argument('--passage_collection_path', type=str,
                         help='path of the passage collection')
     parser.add_argument('--ir_model_name', type=str, default='BM25Okapi',
@@ -174,6 +176,7 @@ if __name__ == '__main__':
         "--do_lower_case", action="store_true", help="Set this flag if you are using an uncased model."
     )
 
+    parser.add_argument("--max_length_cross_architecture", default=384, type=int)
     parser.add_argument("--max_passage_length", default=256, type=int)
     parser.add_argument("--max_query_length", default=32, type=int)
 
@@ -243,7 +246,7 @@ if __name__ == '__main__':
     query_transform = None
     context_transform = None
     if args.architecture == 'cross':
-        transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=512, bool_np_array=True)
+        transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=args.max_length_cross_architecture, bool_np_array=True)
     else:
         query_transform = RankingTransform(tokenizer=tokenizer, max_len=args.max_query_length, bool_np_array = True)
         context_transform = RankingTransform(tokenizer=tokenizer, max_len=args.max_passage_length, bool_np_array = True)

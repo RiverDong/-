@@ -12,10 +12,10 @@ from transformers import AutoModelForSequenceClassification, AutoModel, AutoToke
     AutoConfig
 
 
-from ir_dataset import CombinedRankingDataset, RankingDataset
-from ir_model import BiEncoderModel, CrossEncoderModel
-from ir_transform import CombinedRankingTransform, RankingTransform
-from ir_utils import get_prediction, store_prediction_results
+from information_retrieval.ir_dataset import CombinedRankingDataset, RankingDataset
+from information_retrieval.ir_model import BiEncoderModel, CrossEncoderModel
+from information_retrieval.ir_transform import CombinedRankingTransform, RankingTransform
+from information_retrieval.ir_utils import get_prediction, store_prediction_results
 from utils import logging_config
 
 logger = logging.getLogger(__name__)
@@ -25,10 +25,11 @@ class ScorePrediction:
     transform = None
     query_transform = None
     context_transform = None
-    params_dir = '/home/srikamma/efs/work/QASystem/QAModel/output_torch/cross/ir_artifacts/bertbase/'
+    params_dir = '/home/srikamma/efs/work/QASystem/QAModel/output_torch/cross/ir_artifacts/bertbase_finetuned/'
     do_lower_case = True
     architecture = 'cross'
 
+    max_length_cross_architecture = 384
     max_query_length = 64
     max_passage_length = 256
 
@@ -59,7 +60,7 @@ class ScorePrediction:
             raise ValueError("Wrong architecture name")
 
         if 'cross' in cls.architecture:
-            cls.transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=512, bool_np_array=True)
+            cls.transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=cls.max_length_cross_architecture, bool_np_array=True)
         else:
             cls.query_transform = RankingTransform(tokenizer=tokenizer, max_len=cls.max_query_length, bool_np_array=True)
             cls.context_transform = RankingTransform(tokenizer=tokenizer, max_len=cls.max_passage_length, bool_np_array=True)
@@ -88,6 +89,8 @@ if __name__ == '__main__':
     parser.add_argument(
         "--do_lower_case", action="store_true", help="Set this flag if you are using an uncased model."
     )
+
+    parser.add_argument("--max_length_cross_architecture", default=384, type=int)
     parser.add_argument("--max_passage_length", default=128, type=int, help='Not Required for CrossEncoder architecture.It uses 512 for query+passage')
     parser.add_argument("--max_query_length", default=64, type=int, help='Not Required for CrossEncoder architecture.It uses 512 for query+passage')
     parser.add_argument('--gpu', type=str, help='gpus to run model on')
@@ -138,7 +141,7 @@ if __name__ == '__main__':
     query_transform = None
     context_transform = None
     if 'cross' in args.architecture:
-        transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=512)
+        transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=args.max_length_cross_architecture)
     else:
         query_transform = RankingTransform(tokenizer=tokenizer, max_len=args.max_query_length)
         context_transform = RankingTransform(tokenizer=tokenizer, max_len=args.max_passage_length)

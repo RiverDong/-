@@ -71,10 +71,10 @@ def logging_config(folder=None, name=None,
     return folder
 
 
-def save_list_dict(x, name, path):
+def save_list_dict(x, name, path, protocol=None):
     # Save a list or dictionary x to a file. The file name and file path are specified by "name" and "path"
     with open(os.path.join(path, name), 'wb') as f:
-        pickle.dump(x, f)
+        pickle.dump(x, f, protocol=protocol)
 
 
 def save_df_as_dict(df, name, path):

@@ -1,9 +1,9 @@
+import os
 import csv
+from tqdm import tqdm
 
 import torch
 from torch.utils.data import Dataset
-from tqdm import tqdm
-import os
 
 import constants
 from utils import pickle_load, pickle_dump
@@ -48,14 +48,14 @@ class CombinedInferenceDataset(Dataset):
       return transformed_query_context
 
 class RankingDataset(Dataset):
-  def __init__(self, file_path, query_transform, context_transform, delimiter='\t'):
+  def __init__(self, file_path, query_transform, context_transform, delimiter='\t', overwrite_cache:bool=False):
     self.query_transform = query_transform
     self.context_transform = context_transform
 
     self.data_source = []
     self.transformed_data = {}
-    cache_path = file_path + '.cache'
-    if os.path.exists(cache_path):
+    cache_path = '.'.join(file_path.split(".")[:-1]) + '.cache'
+    if os.path.exists(cache_path) and not overwrite_cache:
       self.transformed_data = pickle_load(cache_path)
       self.data_source = [0] * len(self.transformed_data)
     else:
@@ -123,13 +123,13 @@ class RankingDataset(Dataset):
            contexts_token_ids_list_batch, contexts_input_masks_list_batch, contexts_segment_ids_list_batch, labels_batch, qids_batch
 
 class CombinedRankingDataset(Dataset):
-  def __init__(self, file_path, transform, delimiter='\t'):
+  def __init__(self, file_path, transform, delimiter='\t',overwrite_cache:bool=False):
     self.transform = transform
 
     self.data_source = []
     self.transformed_data = {}
-    cache_path = file_path + '_combined.cache'
-    if os.path.exists(cache_path):
+    cache_path = '.'.join(file_path.split(".")[:-1]) + '_combined.cache'
+    if os.path.exists(cache_path) and not overwrite_cache:
       self.transformed_data = pickle_load(cache_path)
       self.data_source = [0] * len(self.transformed_data)
     else:

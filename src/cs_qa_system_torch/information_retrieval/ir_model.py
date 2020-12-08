@@ -1,14 +1,13 @@
-import numpy as np
-import constants
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import BertPreTrainedModel, BertModel, DistilBertModel
+from transformers import DistilBertModel, BertModel, BertForSequenceClassification
 
-class BertBiEncoderModel(BertPreTrainedModel):
+
+class BiEncoderModel(nn.Module):
   def __init__(self, config, *inputs, **kwargs):
-    super().__init__(config, *inputs, **kwargs)
-    self.bert = kwargs['bert']
+    super().__init__()
+    self.model = kwargs['model']
     try:
       self.dropout = nn.Dropout(config.hidden_dropout_prob)
       self.query_fc = nn.Linear(config.hidden_size, 128)
@@ -22,15 +21,18 @@ class BertBiEncoderModel(BertPreTrainedModel):
   def forward(self, query_input_ids, query_attention_mask, query_segment_ids,
               context_input_ids,  context_attention_mask, context_segment_ids):
 
-    if isinstance(self.bert, DistilBertModel):
-      query_vec = self.bert(query_input_ids, query_attention_mask)[-1]  # [bs,dim]
+    if isinstance(self.model, DistilBertModel):
+      query_vec = self.model(query_input_ids, query_attention_mask)[-1]  # [bs,dim]
       query_vec = query_vec[:, 0]
-      context_vec = self.bert(context_input_ids, context_attention_mask)[-1]  # [bs,dim]
+      context_vec = self.model(context_input_ids, context_attention_mask)[-1]  # [bs,dim]
       context_vec = context_vec[:, 0]
+    elif isinstance(self.model, BertModel):
+      query_vec = self.model(query_input_ids, query_attention_mask, query_segment_ids)[-1]  # [bs,dim]
+      context_vec = self.model(context_input_ids, context_attention_mask, context_segment_ids)[-1]  # [bs,dim]
+    elif isinstance(self.model,BertForSequenceClassification):
+      raise ValueError("Wrong Input Model Given for Biencoder")
     else:
-      query_vec = self.bert(query_input_ids, query_attention_mask, query_segment_ids)[-1]  # [bs,dim]
-      context_vec = self.bert(context_input_ids, context_attention_mask, context_segment_ids)[-1]  # [bs,dim]
-
+      raise ValueError("Wrong Input Model Given for Biencoder")
     context_vec = self.context_fc(self.dropout(context_vec))
     context_vec = F.normalize(context_vec, 2, -1)
 
@@ -40,10 +42,10 @@ class BertBiEncoderModel(BertPreTrainedModel):
     dot_product = torch.sum(context_vec*query_vec,dim=1)
     return dot_product
 
-class BertCrossEncoderModel(BertPreTrainedModel):
+class CrossEncoderModel(nn.Module):
   def __init__(self, config, *inputs, **kwargs):
-    super().__init__(config, *inputs, **kwargs)
-    self.bert = kwargs['bert']
+    super().__init__()
+    self.model = kwargs['model']
     try:
       self.dropout = nn.Dropout(config.hidden_dropout_prob)
       self.fc1 = nn.Linear(config.hidden_size, 128)
@@ -58,11 +60,17 @@ class BertCrossEncoderModel(BertPreTrainedModel):
 
   def forward(self, input_ids,  attention_mask, segment_ids):
 
-    if isinstance(self.bert, DistilBertModel):
-      bert_vec = self.bert(input_ids, attention_mask)[-1]  # [bs,dim]
+    if isinstance(self.model, DistilBertModel):
+      bert_vec = self.model(input_ids, attention_mask)[-1]  # [bs,dim]
       bert_vec = bert_vec[:, 0]
+    elif isinstance(self.model, BertModel):
+      bert_vec = self.model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=segment_ids)[-1]  # [bs,dim]
+    elif isinstance(self.model,BertForSequenceClassification):
+      bert_vec = self.model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=segment_ids)[0]
+      bert_vec = torch.nn.functional.softmax(bert_vec, dim=1)
+      return bert_vec[:,-1]
     else:
-      bert_vec = self.bert(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=segment_ids)[-1]  # [bs,dim]
+      raise ValueError("Wrong Input Model Given for crossencoder")
     bert_vec = torch.tanh(bert_vec)
     bert_vec = self.fc1(self.dropout(bert_vec))
     # bert_vec = self.fc11(self.dropout(bert_vec))

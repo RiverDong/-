@@ -53,8 +53,8 @@ class BM25(object):
         with Pool(n_cpu) as pool:
             passage_info = pool.map(self._get_passage_info, corpus)
         toc = time.time()
-        print('Information of {0:d} passages obtained using {1:d} processes in {2:.2f} second(s)'.format(
-            self.passage_count, n_cpu, toc - tic))
+        # print('Information of {0:d} passages obtained using {1:d} processes in {2:.2f} second(s)'.format(
+        #     self.passage_count, n_cpu, toc - tic))
 
         # Get the index to pid mapping (self.idx2pid), the word count for each passage (self.word_count_array),
         # the number of passages containing each word (self.num_passage_containing_word) and
@@ -70,20 +70,20 @@ class BM25(object):
             self.num_passage_containing_word.update(word_indicator)  # "update" is much faster than "+="
         self.total_word_count = self.word_count_array.sum()
         toc = time.time()
-        print('idx2pid, word_count_array, num_passage_containing_word and total_word_count obtained '
-              'in {:.2f} second(s)'.format(toc - tic))
+        # print('idx2pid, word_count_array, num_passage_containing_word and total_word_count obtained '
+        #       'in {:.2f} second(s)'.format(toc - tic))
 
         # Get the word to index mapping (self.word2idx), the idf for each word (self.idf_array)
         tic = time.time()
         self.word2idx = {word: (i + 1) for i, word in enumerate(self.num_passage_containing_word)}
         self.idf_array = self._get_idf_array()
         toc = time.time()
-        print('word2idx and idf_array obtained in {:.2f} second(s)'.format(toc - tic))
+        # print('word2idx and idf_array obtained in {:.2f} second(s)'.format(toc - tic))
 
         # Get the word-passage frequency array (self.freq_array). It is an n * m array, where n is the total word
         # count, m is the total passage count, the (i, j)th entry is the number of times word i occurs in passage j
         # (i and j are the indices in self.word2idx and self.idx2pid)
-        # This array is sparse and consists of small integers, so here we use a sparse matrix with dtype "uint8" to
+        # This array is sparse and consists of small integers, so here we use a sparse matrix with dtype "uint32" to
         # reduce the memory
         tic = time.time()
         col = list()
@@ -93,14 +93,14 @@ class BM25(object):
             for word, freq in passage_info[i][2].items():
                 col.append(i)
                 row.append(self.word2idx[word])
-                if freq >= 256:
-                    print('The word "{0:}" occurs {1:d} times in passage with pid {2:d}, '
-                          'and we truncate its occurrence frequency to 255'.format(word, freq, self.idx2pid[i]))
-                    freq = 255
+                if freq >= 4294967296:
+                    # print('The word "{0:}" occurs {1:d} times in passage with pid {2:d}, '
+                    #       'and we truncate its occurrence frequency to 4294967295'.format(word, freq, self.idx2pid[i]))
+                    freq = 4294967295
                 data.append(freq)
-        self.freq_array = csr_matrix((data, (row, col)), dtype='uint8')
+        self.freq_array = csr_matrix((data, (row, col)), dtype='uint32')
         toc = time.time()
-        print('freq_array obtained in {:.2f} second(s)'.format(toc - tic))
+        # print('freq_array obtained in {:.2f} second(s)'.format(toc - tic))
 
         assert (self.freq_array.toarray().sum(axis=0) == self.word_count_array).all()
         assert (self.freq_array.toarray()[0] == 0).all()
@@ -130,12 +130,12 @@ class BM25(object):
             os.makedirs(self.root_path, exist_ok=False)
         if removed is None:
             utils.save_list_dict(self.__dict__, '{:}_saved'.format(self.name), self.root_path, protocol=4)
-            print('{0:} saved to {1:}'.format(self.name, self.root_path))
+            # print('{0:} saved to {1:}'.format(self.name, self.root_path))
         else:
             assert isinstance(removed, list) and set(removed).issubset(set(self.__dict__.keys()))
             dict_to_save = {k: v for k, v in self.__dict__.items() if k not in removed}
             utils.save_list_dict(dict_to_save, '{:}_saved'.format(self.name), self.root_path, protocol=4)
-            print('{0:} saved to {1:} with {2:} removed'.format(self.name, self.root_path, ', '.join(removed)))
+            # print('{0:} saved to {1:} with {2:} removed'.format(self.name, self.root_path, ', '.join(removed)))
 
     def load(self, name, root_path):
         """
@@ -148,7 +148,7 @@ class BM25(object):
         new_root_path = root_path.rstrip('/')
         if old_root_path != new_root_path:
             self.change_root_path(new_root_path)
-        print('{0:} loaded from {1:}'.format(name, root_path))
+        # print('{0:} loaded from {1:}'.format(name, root_path))
 
     def change_name(self, new_name):
         """
@@ -157,7 +157,7 @@ class BM25(object):
         """
         old_name = self.name
         self.name = new_name
-        print('name changed from {0:} to {1:}'.format(old_name, new_name))
+        # print('name changed from {0:} to {1:}'.format(old_name, new_name))
 
     def change_root_path(self, new_root_path):
         """
@@ -167,7 +167,7 @@ class BM25(object):
         new_root_path = new_root_path.rstrip('/')
         old_root_path = self.root_path.rstrip('/')
         self.root_path = new_root_path
-        print('root_path changed from {0:} to {1:}'.format(old_root_path, new_root_path))
+        # print('root_path changed from {0:} to {1:}'.format(old_root_path, new_root_path))
 
     def _get_idf_array(self):
         raise NotImplementedError()
@@ -244,7 +244,7 @@ class BM25(object):
             # os.system('taskset -p -c {0:d} {1:d}'.format(i % n_cpu, os.getpid()))
             processes.append(p)
             p.start()
-            print('Process {:} is running...'.format(p.name))
+            # print('Process {:} is running...'.format(p.name))
         for p in processes:
             p.join()
 
@@ -255,8 +255,8 @@ class BM25(object):
             df_result = df_result.append(df_concat, ignore_index=False)
             os.remove(os.path.join(self.root_path, df_concat_name))
         toc = time.time()
-        print('Top-{0:d} relevant passages for {1:d} queries found using {2:d} processes in {3:.2f} second(s)'.format(
-            n, df_result.shape[0], n_cpu, toc - tic))
+        # print('Top-{0:d} relevant passages for {1:d} queries found using {2:d} processes in {3:.2f} second(s)'.format(
+        #     n, df_result.shape[0], n_cpu, toc - tic))
 
         return df_result
 

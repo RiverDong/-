@@ -3,8 +3,6 @@ from json import JSONDecodeError
 import pandas as pd
 
 import torch
-from transformers import BertModel, BertConfig, BertTokenizer
-from transformers import DistilBertModel, DistilBertConfig, DistilBertTokenizer
 
 import constants
 
@@ -33,11 +31,6 @@ def load_passage_collection(collection_path):
     collection_tuple = list(collection_ir.items())
     return collection_ir, collection_tuple,collection_ae
 
-MODEL_CLASSES = {
-    'bert': (BertConfig, BertTokenizer, BertModel),
-    'distilbert': (DistilBertConfig, DistilBertTokenizer, DistilBertModel)
-}
-
 def predict(dataloader, model, device):
     prediction_list = []
     model.eval()
@@ -45,7 +38,6 @@ def predict(dataloader, model, device):
         input_batch = tuple(t.to(device) for t in batch)
         with torch.no_grad():
             out = model(*input_batch)
-            #out = torch.sigmoid(out)
             prediction_list.extend(out.squeeze().tolist())
     return prediction_list
 

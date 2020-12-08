@@ -5,14 +5,13 @@ import numpy as np
 from string import Template
 from collections import OrderedDict
 import nltk
+nltk.download('stopwords')
 from nltk.corpus import stopwords
 from nltk.stem.snowball import SnowballStemmer
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import wordnet
 
-input_path = '/data/qyouran/QABot/english_preprocessing_input'
-# input_path = '/Users/qyouran/Documents/QA/QABot/Input'
-nltk.data.path = [input_path] + nltk.data.path
+
 
 # Noise ######################################################
 # In DATE regex, mm and dd can have only one digit, and / can also be - or \s

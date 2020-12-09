@@ -1,10 +1,10 @@
-from sentence_transformers.readers import InputExample
-import csv
-import gzip
 import os
+import csv
+os.chdir("/home/yqinamz/work/QA_BOT/CS-QASystem-Torch_old/src/CS-QASystem-Torch/src/cs_qa_system_torch")
+from sentence_transformers.readers import InputExample
 
 
-class AmazonDataReader(object):
+class QA200DataReader(object):
     """
     Reads the amazon dataset
     """
@@ -22,9 +22,9 @@ class AmazonDataReader(object):
         examples = []
         id = 0
         for row in data:
-            guid = "%s-%s-%s" % (filename, row['pid'], row['qid'])
+            guid = "%s-%s" % (filename, id)
             id += 1
-            examples.append(InputExample(guid=guid, texts=[row['query'], row['passage']], label=self.map_label(row['label'])))
+            examples.append(InputExample(guid=guid, texts=[row['q1'], row['q2']], label=self.map_label(row['label'])))
 
             if 0 < max_examples <= len(examples):
                 break

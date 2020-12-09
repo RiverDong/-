@@ -13,12 +13,11 @@ sys.path.append('/home/srikamma/efs/workspace/CS-QASystem-Torch/src/CS-QASystem-
 
 ```python
 #train model
-%%run -i /Users/yqinamz/Desktop/QA_BOT/CS-QASystem-Torch/src/CS-QASystem-Torch/src/cs_qa_system_torch/train_QSM_Sbert.py \
+%%time
+%run -i /home/yqinamz/work/QA_BOT/workspace/src/CS-QASystem-Torch/src/cs_qa_system_torch/question_similarity/train_QSM_Sbert.py \
 --pretrain_model_path '/home/yqinamz/output/quora_sts-bert-base-nli-mean-tokens-2020-08-17_20-53-14/' \
 --model_name '/home/yqinamz/output/Sbert_test' \
---train_data_path '/home/yqinamz/QA_Bot/QA_EXP/EXP_1002/Mix_2USE_8R_1009/' 
-
-
+--train_data_path '/home/yqinamz/work/QA_BOT/data/QSM_2nd_Launch/Train_model/train_ramdon_1vs4_ann_V3_qa210'
 
 ```
 
@@ -26,7 +25,8 @@ sys.path.append('/home/srikamma/efs/workspace/CS-QASystem-Torch/src/CS-QASystem-
 
 
 ```python
-%%run -i /Users/yqinamz/Desktop/QA_BOT/CS-QASystem-Torch/src/CS-QASystem-Torch/src/cs_qa_system_torch/QSM_inference.py \
+%%time
+%run -i /home/yqinamz/work/QA_BOT/workspace/src/CS-QASystem-Torch/src/cs_qa_system_torch/question_similarity/QSM_inference.py \
 --saved_model_path '/home/yqinamz/output/quora_sts-bert-base-nli-mean-tokens-2020-08-17_20-53-14/' \
 --test_data_path '/home/yqinamz/QA_Bot/QA_EXP/EXP_1002/Mix_2USE_8R_1009/test_sample.tsv'
 
@@ -36,7 +36,11 @@ sys.path.append('/home/srikamma/efs/workspace/CS-QASystem-Torch/src/CS-QASystem-
 
 
 ```python
-
+%%time
+%run -i /home/yqinamz/work/QA_BOT/workspace/src/CS-QASystem-Torch/src/cs_qa_system_torch/question_similarity/QSM_Real_time_inference.py \
+--saved_model_path '/home/yqinamz/output/Qa210_ann_v3-sbert-2020-12-07_20-12-07/' \
+--qa_repo_path '/home/yqinamz/work/QA_BOT/data/QSM_2nd_Launch/Final_json/qa_bank_214_1208.json' \
+--test_data_path '/home/yqinamz/work/QA_BOT/data/QSM_1st_Launch/Sbert_Result/traffic_3000_matched_q.txt'
 ```
 
 ## Information Retrieval

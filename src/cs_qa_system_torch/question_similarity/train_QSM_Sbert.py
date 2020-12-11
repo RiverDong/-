@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
 #os.chdir("/home/yqinamz/work/QA_BOT/CS-QASystem-Torch_old/src/CS-QASystem-Torch/src/cs_qa_system_torch")
 
 from Reader.QA200DataReader import QA200DataReader
@@ -13,28 +13,11 @@ from datetime import datetime
 import argparse
 
 
-parser = argparse.ArgumentParser(description='This module is used to train Question Similarity model')
-
-parser.add_argument('--pretrain_model_path', type=str,
-                    help='path of pre-trained model')
-parser.add_argument('--model_name', type=str,
-                    help='model name')
-parser.add_argument('--train_data_path', type=str,
-                    help='training data path')
-# parser.add_argument('--work_dir', type=str,
-#                     help='working directory')
-
-#### Just some code to print debug information to stdout
-logging.basicConfig(format='%(asctime)s - %(message)s',
-                    datefmt='%Y-%m-%d %H:%M:%S',
-                    level=logging.INFO,
-                    handlers=[LoggingHandler()])
-
 
 def train_QSM_Sbert(args):
     # Read the dataset
-    train_batch_size = 16
-    num_epochs = 2
+    train_batch_size = args.train_batch_size
+    num_epochs = args.num_train_epochs
     model_save_path = args.model_name +'-sbert-'+datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     model = SentenceTransformer(args.pretrain_model_path)
@@ -69,5 +52,25 @@ def train_QSM_Sbert(args):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='This module is used to train Question Similarity model')
+
+    parser.add_argument('--pretrain_model_path', type=str,
+                        help='path of pre-trained model')
+    parser.add_argument('--model_name', type=str,
+                        help='model name')
+    parser.add_argument('--train_data_path', type=str,
+                        help='training data path')
+    parser.add_argument('--gpu', type=str, default='', 
+                        help='gpus to run model on')
+    parser.add_argument("--train_batch_size", default=16,
+                         type=int, help="Total batch size for training.")
+    parser.add_argument("--num_train_epochs", default=2,
+                         type=int, help="number of training epochs")
+
+
     arg_parser = parser.parse_args()
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = arg_parser.gpu
+
+
     train_QSM_Sbert(arg_parser)

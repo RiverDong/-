@@ -111,7 +111,7 @@ def get_files_in_folder(root, start_with=None, end_with=None, not_start_with=Non
     """
     all_file_path = []
     for path, _, files in os.walk(root):
-        all_file_path.extend([(file, path) for file in files])
+        all_file_path.extend([(f, path) for f in files])
         if not recursively:
             break
 

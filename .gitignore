@@ -2,6 +2,10 @@
 *#
 *.swp
 
+.DS_Store
+src/.DS_Store
+src/cs_qa_system_torch/.DS_Store
+
 __pycache__/
 *.py[cod]
 *$py.class

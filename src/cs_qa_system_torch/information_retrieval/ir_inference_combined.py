@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 class ScorePrediction:
     passage_collection = None
+    passage_collection_ae = None
     ir_model = None
     ml_model = None
     transform = None
@@ -34,12 +35,27 @@ class ScorePrediction:
     word_tokenizer_name = 'simple_word_tokenizer_no_stopwords_stem'
     ir_model_name = 'BM25Okapi'
 
-    params_dir = '/home/srikamma/efs/work/QASystem/QAModel/output_torch/cross/ir_artifacts/bertbase_finetuned/'
+
+    ir_model_weight = 0.50
+    ir_top_n = 10
+    params_dir = '/data/qyouran/QABot/output_torch_train/ir_finetuned_large'
     do_lower_case = True
     architecture = 'cross'
 
+    max_length_cross_architecture = 384
     max_query_length = 64
     max_passage_length = 256
+
+    ir_ml_model_score_threshold = 0.80
+
+    @classmethod
+    def top_n_passage_ids(cls, query, ir_model, n):
+        # For a given query, get pids of the sorted top n relevant passages and their scores using the IR model
+        try:
+            return ir_model.get_top_n_single(query, n)
+        except (AttributeError, TypeError) as error:
+            print('Error: please make sure the IR model has a "get_top_n_single" method with desired signature')
+            raise error
 
     @classmethod
     def load_ir_model(cls):
@@ -75,7 +91,7 @@ class ScorePrediction:
             raise ValueError("Wrong architecture name")
 
         if 'cross' in cls.architecture:
-            cls.transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=512, bool_np_array=True)
+            cls.transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=cls.max_length_cross_architecture, bool_np_array=True)
         else:
             cls.query_transform = RankingTransform(tokenizer=tokenizer, max_len=cls.max_query_length, bool_np_array=True)
             cls.context_transform = RankingTransform(tokenizer=tokenizer, max_len=cls.max_passage_length, bool_np_array=True)
@@ -83,11 +99,20 @@ class ScorePrediction:
         cls.ml_model.load_state_dict(torch.load(os.path.join(cls.params_dir, 'pytorch_model.pt')))
 
     @classmethod
+    def model_ir_score(cls, x, model_score_col, ir_score_col, wt):
+        ir_score_sum = x[ir_score_col].sum()
+        if ir_score_sum == 0:
+            x['model_ir_score'] = wt * x[model_score_col]
+        else:
+            x['model_ir_score'] = wt * x[model_score_col] + (1 - wt) * (x[ir_score_col] / ir_score_sum)
+        return x
+
+
+    @classmethod
     def get_documents(cls, query):
         if cls.ml_model == None:
             cls.load_ir_model()
-        pred_list = [(1, doc, query, cls.passage_collection_ae[doc], score) for doc, score in
-                     zip(*top_n_passage_ids(query, cls.ir_model, cls.index_top_n))]
+        pred_list = [(1, doc, query, cls.passage_collection[doc], score) for doc,score in zip(*cls.top_n_passage_ids(query, cls.ir_model, cls.index_top_n))]
 
         if 'cross' in cls.architecture:
             dataset = CombinedInferenceDataset(pred_list, cls.transform)
@@ -97,8 +122,11 @@ class ScorePrediction:
         predictions = predict(dataloader, cls.ml_model, "cpu")
         df = pd.DataFrame(pred_list, columns=['qid', 'pid', 'query', 'passage', 'ir_score'])
         df['ml_score'] = predictions
-
-        return df
+        df = df[df.ml_score >= cls.ir_ml_model_score_threshold].reset_index(drop=True)
+        cls.model_ir_score(df, 'ml_score', 'ir_score', cls.ir_model_weight)
+        df.sort_values('model_ir_score',ascending=False)
+        df['passage'] = df['pid'].apply(lambda x:cls.passage_collection_ae[x])
+        return df.head(cls.ir_top_n)
 
 
 def top_n_passage_ids(query, ir_model, n):

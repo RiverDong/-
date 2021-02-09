@@ -571,7 +571,10 @@ def get_passages(passage, answer, max_passage_length, stride):
     passages = []
     if len(passage.split()) <= max_passage_length:
         return [passage]
-    answer_start_index = passage.index(answer)
+    try:
+        answer_start_index = passage.index(answer)
+    except:
+        return [' '.join(passage.split()[i:i + max_passage_length]) for i in range(0, len(passage.split()), max_passage_length)]
     if max_passage_length > len(answer.split()):
         max_allowed_left = random.randint(0, max_passage_length - len(answer.split()))
     else:

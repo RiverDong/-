@@ -5,6 +5,8 @@ import timeit
 import logging
 import pandas as pd
 import numpy as np
+import re
+import json
 
 import torch
 from torch import nn
@@ -36,21 +38,24 @@ logger = logging.getLogger(__name__)
 
 class ScorePrediction:
     passage_collection = None
+    passage_url = None
     ir_model = None
     ml_model = None
     transform = None
     query_transform = None
     context_transform = None
     index_top_n = 10
+    passage_url_path = '/data/QAData/InformationRetrievalData/amazon/production_collection_url.json'
     passage_collection_path = '/data/QAData/InformationRetrievalData/amazon/production_collection.json'
     word_tokenizer_name = 'simple_word_tokenizer_no_stopwords_stem'
     ir_model_name = 'BM25Okapi'
 
 
-    params_dir = '/home/srikamma/efs/work/QASystem/QAModel/output_torch/cross/ir_artifacts/bertbase_finetuned/'
+    params_dir = '/data/qyouran/QABot/output_torch_train/ir_finetuned_large'
     do_lower_case = True
     architecture = 'cross'
-    ir_model_weight = 0.46
+    ir_model_weight = 0.50
+    ir_ml_model_score_threshold = 0.80
     ir_top_n = 1
 
     max_length_cross_architecture = 384
@@ -59,7 +64,7 @@ class ScorePrediction:
 
     device = torch.device('cuda:1') if torch.cuda.is_available() else torch.device('cpu')
     #device = torch.device('cpu')
-    params_dir_ae = '/home/srikamma/efs/work/QASystem/QAModel/output_answer_extraction/bert_output_final_finetune'
+    params_dir_ae = '/data/qyouran/QABot/output_torch_train/ae_finetuned_large'
     passage_collection_ae = None
     ae_model = None
     ae_tokenizer = None
@@ -68,6 +73,120 @@ class ScorePrediction:
     model_type_ae = 'bert'
     n_best_size = 10
     max_answer_length = 150
+
+
+    ################ blacklist code ########################################################################
+    blist = ['a credit', 'a discount', 'a new order', 'a phone call i received', 'a recent order', 'about my order',
+             'account question', 'account specialist', 'add to my order', 'amazon', 'amazon email', 'amazon order',
+             'amazon pay', 'an email i received', 'an email i recieved', 'an item i canceled', 'an item price',
+             'an order', 'another account', 'assistance', 'billing issue', 'call instead', 'call me', 'call me instead',
+             'call me please', 'can i talk to an amazon assitant', 'can you call me', 'can you help me',
+             'can you please call me now', 'claim status', 'complaint', 'costumer service', 'credit', 'customer',
+             'delivery date', 'did not order', 'discounts', 'echo loop', 'email', 'email from amazon', 'email i go',
+             'email i got', 'email i received', 'email i recieved', 'email offer', 'emails', 'fraudulent charges',
+             'good morning', 'hello', 'help me', 'help with a claim', 'help with an order', 'help with my order',
+             'help with order', 'hi there', 'how do i email the seller?', 'i accidentally canceled an order',
+             'i accidentally cancelled an order', 'i got an email', 'i have an issue', 'i need a phone call',
+             'i need help', 'i need help from amazon 2.0', 'i need more help', 'i need to call amazon',
+             'i placed an order', 'i want a phone call', 'information', 'issue with an order', 'issue with order',
+             'it is the end of the day', 'item information', 'item price', 'last order', 'lists', 'live help',
+             'memberships', 'missing', 'mistake', 'more help', 'movie', 'multiple accounts', 'my claim', 'my credit',
+             'my last order', 'my lists', 'my most recent order', 'my order', 'my recent order', 'need a phone call',
+             'need help', 'never mind', 'nevermind', 'new order', 'none of the above', 'none of these', 'order',
+             'order issues', 'order item', 'order number', 'order problem', 'order question', 'ordering', 'other',
+             'phone call', 'phone call from amazon', 'phone call i received', 'phone calls', 'phone number',
+             'place an order', 'placing order', 'please call me', 'please call me about an order', 'pre order',
+             'previous order', 'price', 'price issue', 'price question', 'problem with order', 'question',
+             'question about an email', 'question about an order', 'question about order', 'shipping', 'shipping times',
+             'something else', 'status', 'supervisor', 'support', 'tablet', "that didn't work",
+             'what is your phone number', 'when will', 'when will i get it', 'when will it ship?',
+             'why is it taking so long?', 'why so long', 'why so long?', 'why was my order canceled',
+             'wrongfully charged', 'yes that order', 'got disconnected', 'accidentally cancelled order', 'disconnected',
+             'error', 'mistake', 'return', 'email']
+    pattern = '((associate|assistant|agent|representative|operator|artificial|chat|rep|human)s?|(need |chat |ask |speak |talk |call |help |contact )(to |with )?(a |an |from )?(live |real |customer service |physical )?(person|someone|customer (service|support)))( please)?$'
+
+    @classmethod
+    def clean_text(cls, text):
+        text = re.sub('^"', "", text)
+        text = re.sub('"$', "", text)
+        text = re.sub('e-mail', "email", text)
+        text = re.sub('\$', " ", text)
+        text = re.sub('\?', " ", text)
+        text = re.sub(r"\(", " ", text)
+        text = re.sub(r"\)", " ", text)
+        text = re.sub(r"\<.*\>", " ", text)
+        text = re.sub(r"\[.*\]", " ", text)
+        text = re.sub(r"\(.*\)", " ", text)
+        text = re.sub(r"\{.*\}", " ", text)
+        text = re.sub(r"^ ", " ", text)
+        text = re.sub(r":", " ", text)
+        text = re.sub(r",", " ", text)
+        text = re.sub(r"_", " ", text)
+        text = re.sub(r"\(", " ", text)
+        text = re.sub(r"\)", " ", text)
+        text = re.sub(r";", " ", text)
+        text = re.sub(r"@", " ", text)
+        text = re.sub(r"/", " ", text)
+        text = re.sub(r"\\", " ", text)
+        text = re.sub(r"~", " ", text)
+        text = re.sub(r"\|", " ", text)
+        text = re.sub(r"\{", " ", text)
+        text = re.sub(r"\}", " ", text)
+        text = re.sub(r"#", " ", text)
+        text = re.sub(r"\. ", "", text)
+        text = re.sub(r"\!", " ", text)
+        text = re.sub(r"\+", " ", text)
+        text = re.sub(r"\n", " ", text)
+
+        url_regex = 'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+        email_regex = '(^[a-z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)'
+        happy_emoticon_regex = ': *\)'
+        sad_emoticon_regex = ': *\('
+        amazon_regex = '.*amazon.*'
+        number_regex = 'num'
+        white_space_regex = '\s+'
+        extra_white_space_regex = '^\s+|\s+$'
+
+        words = re.split('\s+', text)
+
+        for w in range(len(words)):
+            if re.match(email_regex, words[w]):
+                words[w] = ' email '
+            elif re.match(url_regex, words[w]):
+                words[w] = ' url '
+            elif re.match(amazon_regex, words[w], re.IGNORECASE):
+                words[w] = ' amazon '
+
+        words[w] = re.sub(number_regex, 'num', words[w])
+
+        text = ' '.join(words)
+        text = re.sub(happy_emoticon_regex, ' happyemot ', text)
+        text = re.sub(sad_emoticon_regex, ' sademot ', text)
+
+        text = re.sub(white_space_regex, ' ', text)
+        text = re.sub(extra_white_space_regex, '', text)
+
+        text = re.sub(r"\s{1,}", ' ', text)
+
+        return text.lower().strip()
+
+    @classmethod
+    def blacklist(cls, text):
+        if text in ['hbo', 'tax', 'tip', 'app', 'tv']:
+            return False
+        elif len(text) > 180 or len(text) < 4:
+            return True
+        elif re.search('\d{3}-\d{7}-\d{7}', text) != None:
+            return True
+        elif text in cls.blist:
+            return True
+        elif re.search(cls.pattern, text) != None:
+            return True
+        else:
+            return False
+
+
+    ############## end black list code ######################################################################
 
     @classmethod
     def top_n_passage_ids(cls, query, ir_model, n):
@@ -79,14 +198,22 @@ class ScorePrediction:
             raise error
 
     @classmethod
-    def get_original_passage(cls, x, passage_collection_ae):
+    def get_original_passage(cls, x, passage_collection_ae, passage_url):
         output = ''
         sentinel = ''
+        output_pid = ''
+        output_url = ''
+        output_title = ''
+        sentinel_url = ''
         for i in x.values:
             if i in passage_collection_ae:
                 output = output + sentinel + passage_collection_ae[i]
                 sentinel = '.'
-        return output
+                output_pid = output_pid + sentinel_url + str(i)
+                output_url = output_url + sentinel_url + passage_url[i][0]
+                output_title = output_title + sentinel_url + passage_url[i][1]
+                sentinel_url = '::'
+        return pd.Series({'pid':output_pid,'passage':output,'url':output_url, 'title':output_title})
 
     @classmethod
     def model_ir_score(cls, x, model_score_col, ir_score_col, wt):
@@ -106,6 +233,8 @@ class ScorePrediction:
         if cls.ir_model == None:
             print('INSIDE THE INIT!!')
             result_dir = ''
+            passage_data = json.load(open(cls.passage_url_path,'r'))
+            cls.passage_url = {int(k): (v1,v2) for k, [v1,v2] in passage_data.items()}
             cls.passage_collection, pid_passage_tuple, cls.passage_collection_ae = load_passage_collection(cls.passage_collection_path)
             word_tokenizer = WordTokenizerFactory.create_word_tokenizer(cls.word_tokenizer_name)
             cls.ir_model = IRModelFactory.create_ir_model(ir_model_name=cls.ir_model_name, ir_model_path=result_dir,
@@ -154,6 +283,9 @@ class ScorePrediction:
 
     @classmethod
     def get_answer(cls,query):
+        query = cls.clean_text(query)
+        if cls.blacklist(query):
+            return [None, reformat_answer('',None, None)]
         cls.load_models()
         pred_list = [(1, doc, query, cls.passage_collection[doc], score) for doc,score in zip(*cls.top_n_passage_ids(query, cls.ir_model, cls.index_top_n))]
         if 'cross' in cls.architecture:
@@ -164,13 +296,17 @@ class ScorePrediction:
         predictions = predict(dataloader, cls.ml_model, cls.device)
         df = pd.DataFrame(pred_list, columns=['qid', 'pid', 'query', 'passage', 'ir_score'])
         df['ml_score'] = predictions
+        ## check model score threshold
+        df = df[df.ml_score >= cls.ir_ml_model_score_threshold].reset_index(drop=True)
+        if len(df) == 0:
+            return [None, reformat_answer('',None, None)]
         x = df.groupby(['qid', 'query']).apply(
             lambda x: cls.model_ir_score(x, 'ml_score', 'ir_score', cls.ir_model_weight)).reset_index(drop=True)
         y = x.groupby(['qid', 'query']).apply(
             lambda x: x.sort_values('model_ir_score', ascending=False).head(cls.ir_top_n)).reset_index(drop=True)
         prediction_df = y.groupby(['qid', 'query']).apply(
-            lambda x: cls.get_original_passage(x['pid'], cls.passage_collection_ae)).reset_index()
-        prediction_df.columns = ['qid', 'query', 'passage']
+            lambda x: cls.get_original_passage(x['pid'], cls.passage_collection_ae, cls.passage_url)).reset_index()
+        prediction_df.columns = ['qid', 'query', 'pid', 'passage', 'url', 'title']
 
 
         example = SquadExample(
@@ -278,8 +414,8 @@ class ScorePrediction:
             0.0,
             cls.ae_tokenizer,
         )
-
-        return reformat_answer(predictions_realtime[0])
+        # return predictions_realtime[0]
+        return [prediction_df.iloc[0]['pid'],reformat_answer(predictions_realtime[0],prediction_df.iloc[0]['url'], prediction_df.iloc[0]['title'])]
 
 def top_n_passage_ids(query, ir_model, n):
     # For a given query, get pids of the sorted top n relevant passages and their scores using the IR model

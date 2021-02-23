@@ -386,6 +386,67 @@ np.quantile(z,0.80)
 len(output)
 ```
 
+## Creating New Production Document Collection for Dialing Up
+
+
+```python
+import pandas as pd
+import json
+
+df_document = pd.read_excel('/data/QAData/InformationRetrievalData/amazon/final_document_T2_dialup_completed_with_performance_confirmed.xlsx').fillna('')
+
+print(df_document['should_exclude'].value_counts())
+
+# Explanations to the labels in "should_exclude" column:
+# 4: duplicated or empty documents
+# 3: link farms
+# 2: documents with poor performance identified in MLDA's deep dive
+# 1: documents that seem to be relevant to very few queries but could mislead the model (model could incorrectly rank them higher than the true relevant documents)
+# 0: all the other documents we will keep (documents with pid 77, 127, 145, 227 seem to be D2 related, but we keep them for now)
+df_document_selected = df_document.loc[df_document['should_exclude'] == 0, :]
+
+df_document_selected
+```
+
+
+```python
+# Sanity check
+assert not (df_document_selected['pid'].isnull()).any()
+assert not (df_document_selected['new_url'] == '').any()
+assert not (df_document_selected['new_title'] == '').any()
+assert not (df_document_selected['new_passage'] == '').any()
+assert not (df_document_selected['new_passage_preprocessed'] == '').any()
+
+assert not df_document_selected['pid'].duplicated().any()
+assert not df_document_selected['new_url'].duplicated().any()
+assert not df_document_selected['new_title'].duplicated().any()
+assert not df_document_selected['new_passage'].duplicated().any()
+assert not df_document_selected['new_passage_preprocessed'].duplicated().any()
+```
+
+
+```python
+output = dict()
+output_url = dict()
+
+for i in df_document_selected.index:
+    pid = df_document_selected.loc[i, 'pid']
+    url = df_document_selected.loc[i, 'new_url']
+    title = df_document_selected.loc[i, 'new_title']
+    passage = df_document_selected.loc[i, 'new_passage']
+    passage_preprocessed = df_document_selected.loc[i, 'new_passage_preprocessed']
+    
+    output[str(pid)] = [passage, passage_preprocessed]
+    output_url[str(pid)] = [url, title]
+
+with open('/data/QAData/InformationRetrievalData/amazon/production_collection.json', 'w') as f:  
+    json.dump(output, f)
+
+with open('/data/QAData/InformationRetrievalData/amazon/production_collection_url.json', 'w') as f:  
+    json.dump(output_url, f)
+```
+
+
 ## Creating AE Annotation into S3
 
 

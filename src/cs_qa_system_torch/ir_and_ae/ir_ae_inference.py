@@ -102,7 +102,10 @@ class ScorePrediction:
              'what is your phone number', 'when will', 'when will i get it', 'when will it ship?',
              'why is it taking so long?', 'why so long', 'why so long?', 'why was my order canceled',
              'wrongfully charged', 'yes that order', 'got disconnected', 'accidentally cancelled order', 'disconnected',
-             'error', 'mistake', 'return', 'email']
+             'error', 'mistake', 'return', 'email', 'a return', 'returns', 'help', 'please help', 'a question', 'questions',
+             'i have a question', 'i have questions', 'gift', 'a gift', 'gifts', 'gift received', 'a gift received', 'gifts received',
+             'gift i received', 'a gift i received', 'gifts i received', 'gift refund', 'gift refunds', 'customer service',
+             'placing an order', 'placing orders', 'place order', 'place orders', 'orders', 'my orders']
     pattern = '((associate|assistant|agent|representative|operator|artificial|chat|rep|human)s?|(need |chat |ask |speak |talk |call |help |contact )(to |with )?(a |an |from )?(live |real |customer service |physical )?(person|someone|customer (service|support)))( please)?$'
 
     @classmethod

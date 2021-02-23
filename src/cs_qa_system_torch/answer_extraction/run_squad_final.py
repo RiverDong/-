@@ -793,6 +793,7 @@ def main():
     parser = argparse.ArgumentParser()
 
     # Required parameters
+    parser.add_argument("--gpu", type=str, default="6,7", help="gpus to run model on")
     parser.add_argument(
         "--model_type",
         default=None,
@@ -1031,6 +1032,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
     parser.add_argument("--threads", type=int, default=1, help="multiple threads for converting example to features")
     args = parser.parse_args()
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
     if args.doc_stride >= args.max_seq_length - args.max_query_length:
         logger.warning(
@@ -1145,5 +1147,4 @@ def main():
 
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"] = "6,7"
     main()

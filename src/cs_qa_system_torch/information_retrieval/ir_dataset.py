@@ -1,6 +1,8 @@
 import os
 import csv
 from tqdm import tqdm
+import json
+import numpy as np
 
 import torch
 from torch.utils.data import Dataset
@@ -186,3 +188,53 @@ class CombinedRankingDataset(Dataset):
     labels_batch = torch.tensor(labels_batch, dtype=torch.float32)
     return token_ids_list_batch, input_masks_list_batch, segment_ids_list_batch, \
            labels_batch, qids_batch
+
+class BiencoderRankingDataset(Dataset):
+  def __init__(self, file_json, query_transform, context_transform, overwrite_cache:bool=False):
+    with open(file_json,'r') as f:
+      data = json.load(f)
+      self.data_list = list(data.values())
+      self.query_transform = query_transform
+      self.context_transform = context_transform
+  def __len__(self):
+    return len(self.data_list)
+  def __getitem__(self,index):
+    datapoint = self.data_list[index]
+    query  = self.data_list[index][constants.RANKING_INPUT_QUERY_NAME]
+    pos_context = self.data_list[index][constants.RANKING_INPUT_DOCUMENT_NAME][0]
+    hard_negs = self.data_list[index][constants.RANKING_INPUT_HARD_NEGATIVES]
+    contexts = [pos_context] + hard_negs
+    transformed_query = self.query_transform([query])  # [token_ids],[seg_ids],[masks]
+    transformed_context = self.context_transform(contexts)  # [token_ids],[seg_ids],[masks]
+    return transformed_query, transformed_context
+
+  def biencoder_collate_fn(self,  batch):
+    query_token_ids_list_batch, query_input_masks_list_batch, query_segment_ids_list_batch, \
+    contexts_token_ids_list_batch, contexts_input_masks_list_batch, contexts_segment_ids_list_batch = [],[],[],[],[],[]
+    #qids_batch = []
+    labels_batch = []
+    for sample in batch:
+      (query_token_ids_list, query_input_masks_list, query_segment_ids_list), \
+      (contexts_token_ids_list, contexts_input_masks_list, contexts_segment_ids_list) = sample
+      query_token_ids_list_batch += query_token_ids_list
+      query_segment_ids_list_batch += query_segment_ids_list
+      query_input_masks_list_batch += query_input_masks_list
+
+      labels_batch.append(len(contexts_token_ids_list_batch))
+
+      contexts_token_ids_list_batch += contexts_token_ids_list
+      contexts_segment_ids_list_batch += contexts_segment_ids_list
+      contexts_input_masks_list_batch += contexts_input_masks_list
+
+
+      #qids_batch.append(sample[-1])
+    long_tensors = [query_token_ids_list_batch, query_input_masks_list_batch, query_segment_ids_list_batch,
+                    contexts_token_ids_list_batch, contexts_input_masks_list_batch, contexts_segment_ids_list_batch]
+
+    query_token_ids_list_batch, query_input_masks_list_batch, query_segment_ids_list_batch,\
+    contexts_token_ids_list_batch, contexts_input_masks_list_batch, contexts_segment_ids_list_batch \
+      = (torch.tensor(t, dtype=torch.long) for t in long_tensors)
+
+    labels_batch = torch.tensor(labels_batch, dtype=torch.float32)
+    return query_token_ids_list_batch, query_input_masks_list_batch, query_segment_ids_list_batch,\
+           contexts_token_ids_list_batch, contexts_input_masks_list_batch, contexts_segment_ids_list_batch, labels_batch, #qids_batch

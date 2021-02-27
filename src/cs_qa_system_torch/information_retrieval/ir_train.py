@@ -8,6 +8,7 @@ import random
 
 import logging
 
+from ir_loss import BiEncoderNllLoss
 from ir_model import BiEncoderModel, CrossEncoderModel
 from utils import logging_config
 
@@ -94,6 +95,7 @@ if __name__ == '__main__':
     )
 
     parser.add_argument("--architecture", required=True, type=str, help='[bi, cross]')
+    parser.add_argument("--projection_dim", default=0, type=int, help="Extra linear layer on top of standard bert/roberta encoder")
 
     parser.add_argument("--train_data_path", default='data', type=str)
     parser.add_argument("--test_data_path", default='data', type=str)
@@ -117,6 +119,7 @@ if __name__ == '__main__':
     parser.add_argument("--warmup_steps", default=2000, type=float)
     parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
+    parser.add_argument("--loss", default='BCE', type=str, help = "['BCE', 'BiEncoderNLL']")
 
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
@@ -153,28 +156,44 @@ if __name__ == '__main__':
         do_lower_case=args.do_lower_case,
         cache_dir=args.cache_dir if args.cache_dir else None,
     )
-    if args.architecture in ['poly', 'bi', 'cross']:
+
+    if args.architecture == 'poly':
         pre_model = AutoModel.from_pretrained(
             args.model_name_or_path,
             from_tf=bool(".ckpt" in args.model_name_or_path),
             config=config,
             cache_dir=args.cache_dir if args.cache_dir else None,
         )
-    else:
+        model = BiEncoderModel(config, model=pre_model)
+    elif args.architecture == 'bi':
+        query_pre_model = AutoModel.from_pretrained(
+            args.model_name_or_path,
+            from_tf=bool(".ckpt" in args.model_name_or_path),
+            config=config,
+            cache_dir=args.cache_dir if args.cache_dir else None,
+        )
+        context_pre_model = AutoModel.from_pretrained(
+            args.model_name_or_path,
+            from_tf=bool(".ckpt" in args.model_name_or_path),
+            config=config,
+            cache_dir=args.cache_dir if args.cache_dir else None,
+        )
+        model = BiEncoderModel(config, query_model=query_pre_model, context_model = context_pre_model, projection_dim = args.projection_dim)
+    elif args.architecture == 'cross':
+        pre_model = AutoModel.from_pretrained(
+            args.model_name_or_path,
+            from_tf=bool(".ckpt" in args.model_name_or_path),
+            config=config,
+            cache_dir=args.cache_dir if args.cache_dir else None,
+        )
+        model = CrossEncoderModel(config, model=pre_model)
+    elif args.architecture == 'cross-default':
         pre_model = AutoModelForSequenceClassification.from_pretrained(
             args.model_name_or_path,
             from_tf=bool(".ckpt" in args.model_name_or_path),
             config=config,
             cache_dir=args.cache_dir if args.cache_dir else None,
         )
-
-    if args.architecture == 'poly':
-        model = BiEncoderModel(config, model=pre_model)
-    elif args.architecture == 'bi':
-        model = BiEncoderModel(config, model=pre_model)
-    elif args.architecture == 'cross':
-        model = CrossEncoderModel(config, model=pre_model)
-    elif args.architecture == 'cross-default':
         model = CrossEncoderModel(config, model=pre_model)
     else:
         raise ValueError("Wrong architecture name")
@@ -254,7 +273,10 @@ if __name__ == '__main__':
 
     #
     #loss_function = nn.BCEWithLogitsLoss()
-    loss_function = nn.BCELoss()
+    if args.loss == 'BCE':
+        loss_function = nn.BCELoss()
+    elif args.loss == 'BiEncoderNLL':
+        loss_function = BiEncoderNllLoss()
     #
     # if args.use_checkpoint:
     #     checkpoint = torch.load(os.path.join(args.checkpoint_dir, args.checkpoint_file))

@@ -42,7 +42,7 @@ class BiEncoderModel(nn.Module):
     super().__init__()
     self.query_model = kwargs['query_model']
     self.context_model = kwargs['context_model']
-    self.project_dim = kwargs['project_dim']
+    self.project_dim = kwargs['projection_dim']
     self.encode_query_proj = (nn.Linear(config.hidden_size, self.project_dim) if self.project_dim != 0 else None)
     self.encode_document_proj = (nn.Linear(config.hidden_size, self.project_dim) if self.project_dim != 0 else None)
 
@@ -100,4 +100,4 @@ class CrossEncoderModel(nn.Module):
     bert_vec = self.fc2(bert_vec)
     bert_vec = torch.sigmoid(bert_vec)
     output = torch.squeeze(bert_vec)
-    return output
+    return output,

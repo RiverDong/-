@@ -1,5 +1,6 @@
 from typing import Tuple
 import torch
+from torch.nn import BCEWithLogitsLoss
 import torch.nn.functional as F
 import torch.tensor as T
 
@@ -20,16 +21,25 @@ def cosine_scores(q_vector: T, ctx_vectors: T):
     # q_vector: n1 x D, ctx_vectors: n2 x D, result n1 x n2
     return F.cosine_similarity(q_vector, ctx_vectors, dim=1)
 
-
+class BiEncoderBCELoss(object):
+    def __call__(
+        self,
+        q_vectors: T, #10x768
+        ctx_vectors: T, #30*768 => 10x30
+        label_vector: T
+    ):
+        scores = torch.sum(q_vectors*ctx_vectors,dim=1)
+        loss = BCEWithLogitsLoss()
+        return loss(scores,label_vector)
 
 class BiEncoderNllLoss(object):
     def __call__(
         self,
         q_vectors: T, #10x768
         ctx_vectors: T, #30*768 => 10x30
-        positive_idx_per_question: list, # [2,4,7,..30] length = 10
+        positive_idx_per_question: T, # [2,4,7,..30] length = 10
         hard_negatice_idx_per_question: list = None,
-    ) -> Tuple[T, int]:
+    ):
         """
         Computes nll loss for the given lists of question and ctx vectors.
         Note that although hard_negative_idx_per_question in not currently in use, one can use it for the
@@ -46,15 +56,15 @@ class BiEncoderNllLoss(object):
 
         loss = F.nll_loss(
             softmax_scores,
-            torch.tensor(positive_idx_per_question).to(softmax_scores.device),
+            positive_idx_per_question,
             reduction="mean",
         )
 
         max_score, max_idxs = torch.max(softmax_scores, 1)
         correct_predictions_count = (
-            max_idxs == torch.tensor(positive_idx_per_question).to(max_idxs.device)
+            max_idxs == positive_idx_per_question
         ).sum()
-        return loss, correct_predictions_count
+        return loss
 
     @staticmethod
     def get_scores(q_vector: T, ctx_vectors: T) -> T:

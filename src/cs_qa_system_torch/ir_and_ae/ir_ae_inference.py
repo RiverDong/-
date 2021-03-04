@@ -73,6 +73,7 @@ class ScorePrediction:
     model_type_ae = 'bert'
     n_best_size = 10
     max_answer_length = 150
+    min_answer_length = 5
 
 
     ################ blacklist code ########################################################################
@@ -418,7 +419,11 @@ class ScorePrediction:
             cls.ae_tokenizer,
         )
         # return predictions_realtime[0]
-        return [prediction_df.iloc[0]['pid'],reformat_answer(predictions_realtime[0],prediction_df.iloc[0]['url'], prediction_df.iloc[0]['title'])]
+        if len(predictions_realtime[0].split()) > cls.min_answer_length:
+            return [prediction_df.iloc[0]['pid'], reformat_answer(predictions_realtime[0], prediction_df.iloc[0]['url'],
+                                                                  prediction_df.iloc[0]['title'])]
+        else:
+            return [None, reformat_answer('', None, None)]
 
 def top_n_passage_ids(query, ir_model, n):
     # For a given query, get pids of the sorted top n relevant passages and their scores using the IR model

@@ -8,7 +8,7 @@ import random
 
 import logging
 
-from ir_loss import BiEncoderNllLoss
+from ir_loss import BiEncoderNllLoss, BiEncoderBCELoss, dot_product_scores
 from ir_model import BiEncoderModel, CrossEncoderModel
 from utils import logging_config
 
@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, MODEL_MAPPING, AutoConfig, AutoModel, AutoModelForSequenceClassification
 from transformers.optimization import AdamW, get_linear_schedule_with_warmup
 
-from ir_dataset import RankingDataset, CombinedRankingDataset
+from ir_dataset import RankingDataset, CombinedRankingDataset, BiencoderRankingDataset
 from ir_transform import RankingTransform, CombinedRankingTransform
 
 logger = logging.getLogger(__name__)
@@ -33,9 +33,7 @@ def set_seed(args):
       torch.cuda.manual_seed_all(args.seed)
 
 
-def eval_running_model(dataloader, threshold=0.5):
-    #loss_fct = nn.BCEWithLogitsLoss()
-    loss_fct = nn.BCELoss()
+def eval_running_model(dataloader, threshold=0.5, loss_fct=nn.BCELoss()):
     model.eval()
     eval_loss, eval_hit_times = 0, 0
     nb_eval_steps, nb_eval_examples = 0, 0
@@ -44,9 +42,16 @@ def eval_running_model(dataloader, threshold=0.5):
         label_batch = eval_batch[-2].to(device)
         with torch.no_grad():
             out = model(*input_batch)
-            e_loss = loss_fct(out, label_batch)
+            e_loss = loss_fct(*out, label_batch)
 
-        eval_hit_times += torch.sum((out >= threshold).float())
+        if isinstance(out,tuple):
+            if len(out) > 1:
+                scores = torch.sum(out[0] * out[1], dim=1)
+            else:
+                scores = out[0]
+        else:
+            scores = out
+        eval_hit_times += torch.sum((scores >= threshold).float())
         eval_loss += e_loss.sum()
 
         nb_eval_examples += label_batch.size(0)
@@ -99,8 +104,11 @@ if __name__ == '__main__':
 
     parser.add_argument("--train_data_path", default='data', type=str)
     parser.add_argument("--test_data_path", default='data', type=str)
+    parser.add_argument(
+        "--use_hard_negatives", action="store_true", help="Set this to the json format train data path file with hard negatives for each query."
+    )
 
-    parser.add_argument("--max_passage_length", default=256, type=int, help='Not Required for CrossEncoder architecture.It uses 512 for query+passage')
+    parser.add_argument("--max_passage_length", default=384, type=int, help='Not Required for CrossEncoder architecture.It uses 512 for query+passage')
     parser.add_argument("--max_query_length", default=32, type=int, help='Not Required for CrossEncoder architecture.It uses 512 for query+passage')
 
 
@@ -119,7 +127,7 @@ if __name__ == '__main__':
     parser.add_argument("--warmup_steps", default=2000, type=float)
     parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
-    parser.add_argument("--loss", default='BCE', type=str, help = "['BCE', 'BiEncoderNLL']")
+    parser.add_argument("--loss", default='BCE', type=str, help = "['BCE', 'BiEncoderNLL', BiEncoderBCE]")
 
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
@@ -216,10 +224,14 @@ if __name__ == '__main__':
         train_dataset = CombinedRankingDataset(args.train_data_path, transform)
         val_dataset = CombinedRankingDataset(args.test_data_path, transform)
     else:
-        train_dataset = RankingDataset(args.train_data_path,
-                                       query_transform, context_transform)
+        if args.use_hard_negatives:
+            train_dataset = BiencoderRankingDataset(args.train_data_path,
+                                           query_transform, context_transform)
+        else:
+            train_dataset = RankingDataset(args.train_data_path,
+                                           query_transform, context_transform)
         val_dataset = RankingDataset(args.test_data_path,
-                                     query_transform, context_transform)
+                                         query_transform, context_transform)
 
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=args.train_batch_size,
@@ -277,6 +289,10 @@ if __name__ == '__main__':
         loss_function = nn.BCELoss()
     elif args.loss == 'BiEncoderNLL':
         loss_function = BiEncoderNllLoss()
+    elif args.loss == 'BiEncoderBCE':
+        loss_function = BiEncoderBCELoss()
+    else:
+        loss_function = nn.BCELoss()
     #
     # if args.use_checkpoint:
     #     checkpoint = torch.load(os.path.join(args.checkpoint_dir, args.checkpoint_file))
@@ -311,7 +327,7 @@ if __name__ == '__main__':
                 inputs_batch = tuple(t.to(device) for t in batch[:-2])
                 labels_batch = batch[-2].to(device)
                 output = model(*inputs_batch)
-                loss = loss_function(output, labels_batch)
+                loss = loss_function(*output, labels_batch)
 
 
                 if args.n_gpu > 1:
@@ -340,8 +356,8 @@ if __name__ == '__main__':
                 if args.save_steps > 0 and global_step % args.save_steps == 0:
                     output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
                     # Take care of distributed/parallel training
-                    pre_model_to_save = pre_model.module if hasattr(pre_model, "module") else pre_model
-                    pre_model_to_save.save_pretrained(output_dir)
+                    #pre_model_to_save = pre_model.module if hasattr(pre_model, "module") else pre_model
+                    #pre_model_to_save.save_pretrained(output_dir)
                     tokenizer.save_pretrained(output_dir)
                     config.save_pretrained(output_dir)
                     checkpoint_save_path = os.path.join(output_dir,'pytorch_model.pt')
@@ -356,8 +372,8 @@ if __name__ == '__main__':
                     logger.info("Saving model checkpoint to %s", output_dir)
                     logger.info("Saving optimizer and scheduler states to %s", output_dir)
 
-        pre_model_to_save = pre_model.module if hasattr(pre_model, "module") else pre_model
-        pre_model_to_save.save_pretrained(args.output_dir)
+        #pre_model_to_save = pre_model.module if hasattr(pre_model, "module") else pre_model
+        #pre_model_to_save.save_pretrained(args.output_dir)
         tokenizer.save_pretrained(args.output_dir)
         config.save_pretrained(args.output_dir)
         checkpoint_save_path = os.path.join(args.output_dir, 'pytorch_model.pt')
@@ -367,7 +383,11 @@ if __name__ == '__main__':
         logger.info("Saving model to %s", args.output_dir)
 
         # add a eval step after each epoch
-        val_result = eval_running_model(val_dataloader)
+        if 'cross' in args.architecture == 'cross':
+            eval_loss_function = nn.BCELoss()
+        else:
+            eval_loss_function = BiEncoderBCELoss()
+        val_result = eval_running_model(val_dataloader,loss_fct=eval_loss_function)
         logger.info('Epoch {}, Global Step {} VAL res:{}\n'.format(epoch, global_step, val_result))
         logger.info(str(val_result) + '\n')
 

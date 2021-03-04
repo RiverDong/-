@@ -208,11 +208,12 @@ class BiencoderRankingDataset(Dataset):
     transformed_context = self.context_transform(contexts)  # [token_ids],[seg_ids],[masks]
     return transformed_query, transformed_context
 
-  def biencoder_collate_fn(self,  batch):
+  def batchify_join_str(self,  batch):
     query_token_ids_list_batch, query_input_masks_list_batch, query_segment_ids_list_batch, \
     contexts_token_ids_list_batch, contexts_input_masks_list_batch, contexts_segment_ids_list_batch = [],[],[],[],[],[]
     #qids_batch = []
     labels_batch = []
+    hard_neg_ctx_indices = []
     for sample in batch:
       (query_token_ids_list, query_input_masks_list, query_segment_ids_list), \
       (contexts_token_ids_list, contexts_input_masks_list, contexts_segment_ids_list) = sample
@@ -220,7 +221,20 @@ class BiencoderRankingDataset(Dataset):
       query_segment_ids_list_batch += query_segment_ids_list
       query_input_masks_list_batch += query_input_masks_list
 
-      labels_batch.append(len(contexts_token_ids_list_batch))
+      hard_negatives_start_idx = 1
+      hard_negatives_end_idx = 1 + len(contexts_token_ids_list)
+      current_ctxs_len = len(contexts_token_ids_list_batch)
+
+      labels_batch.append(current_ctxs_len)
+      hard_neg_ctx_indices.append(
+        [
+          i
+          for i in range(
+          current_ctxs_len + hard_negatives_start_idx,
+          current_ctxs_len + hard_negatives_end_idx,
+        )
+        ]
+      )
 
       contexts_token_ids_list_batch += contexts_token_ids_list
       contexts_segment_ids_list_batch += contexts_segment_ids_list
@@ -235,6 +249,6 @@ class BiencoderRankingDataset(Dataset):
     contexts_token_ids_list_batch, contexts_input_masks_list_batch, contexts_segment_ids_list_batch \
       = (torch.tensor(t, dtype=torch.long) for t in long_tensors)
 
-    labels_batch = torch.tensor(labels_batch, dtype=torch.float32)
+    labels_batch = torch.tensor(labels_batch, dtype=torch.long)
     return query_token_ids_list_batch, query_input_masks_list_batch, query_segment_ids_list_batch,\
-           contexts_token_ids_list_batch, contexts_input_masks_list_batch, contexts_segment_ids_list_batch, labels_batch, #qids_batch
+           contexts_token_ids_list_batch, contexts_input_masks_list_batch, contexts_segment_ids_list_batch, labels_batch, hard_neg_ctx_indices

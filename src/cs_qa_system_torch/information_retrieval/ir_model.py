@@ -38,13 +38,13 @@ def get_enonding_vector(model, input_ids, attention_mask, segment_ids):
   return vec
 
 class BiEncoderModel(nn.Module):
-  def __init__(self, config, *inputs, **kwargs):
+  def __init__(self, query_config, context_config, *inputs, **kwargs):
     super().__init__()
     self.query_model = kwargs['query_model']
     self.context_model = kwargs['context_model']
     self.project_dim = kwargs['projection_dim']
-    self.encode_query_proj = (nn.Linear(config.hidden_size, self.project_dim) if self.project_dim != 0 else None)
-    self.encode_document_proj = (nn.Linear(config.hidden_size, self.project_dim) if self.project_dim != 0 else None)
+    self.encode_query_proj = (nn.Linear(query_config.hidden_size, self.project_dim) if self.project_dim != 0 else None)
+    self.encode_document_proj = (nn.Linear(context_config.hidden_size, self.project_dim) if self.project_dim != 0 else None)
 
   def forward(self, query_input_ids, query_attention_mask, query_segment_ids,
               context_input_ids,  context_attention_mask, context_segment_ids):

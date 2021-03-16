@@ -20,8 +20,11 @@ class IRModelFactory:
     @staticmethod
     def create_ir_model(ir_model_name: str, ir_model_path: str, corpus: list, tokenizer: callable, **kwargs):
         if ir_model_name.startswith(constants.IR_BM25OKAPI):
-            ir_model_param = {k: v if ((k not in kwargs) or (kwargs[k] is None)) else kwargs[k] for k, v in constants.IR_MODELS[constants.IR_BM25OKAPI].items()}
-            return BM25Okapi(name=ir_model_name, root_path=ir_model_path, corpus=corpus, tokenizer=tokenizer, **ir_model_param)
+            return BM25Okapi(name=ir_model_name, root_path=ir_model_path,
+                             corpus=corpus, tokenizer=tokenizer,
+                             k1 = constants.IR_MODELS[constants.IR_BM25OKAPI]['k1'],
+                             b=constants.IR_MODELS[constants.IR_BM25OKAPI]['b'],
+                             delta=constants.IR_MODELS[constants.IR_BM25OKAPI]['delta'])
         else:
             raise NotImplementedError()
 

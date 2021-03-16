@@ -1,15 +1,17 @@
-
+import glob
 import os
 import time
 import argparse
 import numpy as np
 from tqdm import tqdm, trange
 import random
+import shutil
 
 import logging
 
-from ir_loss import BiEncoderNllLoss, BiEncoderBCELoss, dot_product_scores
+from ir_loss import BiEncoderNllLoss, BiEncoderBCELoss
 from ir_model import BiEncoderModel, CrossEncoderModel
+from ir_utils import get_ir_model_attributes
 from utils import logging_config
 
 
@@ -17,9 +19,10 @@ from utils import logging_config
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, MODEL_MAPPING, AutoConfig, AutoModel, AutoModelForSequenceClassification
+from transformers import AutoTokenizer, AutoConfig, AutoModel, AutoModelForSequenceClassification
 from transformers.optimization import AdamW, get_linear_schedule_with_warmup
 
+import constants
 from ir_dataset import RankingDataset, CombinedRankingDataset, BiencoderRankingDataset
 from ir_transform import RankingTransform, CombinedRankingTransform
 
@@ -69,16 +72,19 @@ def eval_running_model(dataloader, threshold=0.5, loss_fct=nn.BCELoss()):
 
 
 if __name__ == '__main__':
-    MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
-    MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
-
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", required=True, type=str, help='Directory to store all the model artifacts')
     parser.add_argument('--gpu', type=str, default="", help = 'gpus to use for training')
     parser.add_argument('--seed', type=int, default=12345, help="random seed for initialization")
-    parser.add_argument("--model_type", default='bert', type=str, help="Model type selected in the list: " + ", ".join(MODEL_TYPES),)
-    parser.add_argument("--model_name_or_path", default='bert-base-uncased', type=str)
+    parser.add_argument("--model_name_or_path", default='bert-base-uncased', type=str, help="This will be used as a "
+                                                                                            "base model for Cross "
+                                                                                            "encoder architecture. "
+                                                                                            "For Biencoder this will "
+                                                                                            "be used as context encder")
+    parser.add_argument("--query_model_name_or_path", default=None, type=str, help="This will be used only for "
+                                                                                   "Biencoder "
+                                                                                   "as query encoder")
 
     parser.add_argument(
         "--config_name", default="", type=str, help="Pretrained config name or path if not the same as model_name"
@@ -108,8 +114,9 @@ if __name__ == '__main__':
         "--use_hard_negatives", action="store_true", help="Set this to the json format train data path file with hard negatives for each query."
     )
 
-    parser.add_argument("--max_passage_length", default=384, type=int, help='Not Required for CrossEncoder architecture.It uses 512 for query+passage')
-    parser.add_argument("--max_query_length", default=32, type=int, help='Not Required for CrossEncoder architecture.It uses 512 for query+passage')
+    parser.add_argument("--max_query_passage_length", default=512, type=int, help='Required for cross encoder')
+    parser.add_argument("--max_passage_length", default=384, type=int, help='Not Required for CrossEncoder architecture.It uses max_query_passage_length argument')
+    parser.add_argument("--max_query_length", default=32, type=int, help='Not Required for CrossEncoder architecture.It uses max_query_passage_length argument')
 
 
     parser.add_argument("--train_batch_size", default=32, type=int, help="Total batch size for training.")
@@ -150,69 +157,30 @@ if __name__ == '__main__':
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
+    pre_model_save_dir = os.path.join(args.output_dir, constants.PRE_MODEL_FOLDER)
+    query_pre_model_save_dir = os.path.join(args.output_dir, constants.QUERY_PRE_MODEL_FOLDER)
+    if not os.path.exists(pre_model_save_dir):
+        os.makedirs(pre_model_save_dir)
+    if args.query_model_name_or_path and not os.path.exists(query_pre_model_save_dir):
+        os.makedirs(query_pre_model_save_dir)
+
     logger.info("The Model artifacts will be saved to: {}".format(args.output_dir))
 
 
     ## init dataset and ir model
-    args.model_type = args.model_type.lower()
-    config = AutoConfig.from_pretrained(
-        args.config_name if args.config_name else args.model_name_or_path,
-        cache_dir=args.cache_dir if args.cache_dir else None,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
-        do_lower_case=args.do_lower_case,
-        cache_dir=args.cache_dir if args.cache_dir else None,
-    )
-
-    if args.architecture == 'poly':
-        pre_model = AutoModel.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-            cache_dir=args.cache_dir if args.cache_dir else None,
-        )
-        model = BiEncoderModel(config, model=pre_model)
-    elif args.architecture == 'bi':
-        query_pre_model = AutoModel.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-            cache_dir=args.cache_dir if args.cache_dir else None,
-        )
-        context_pre_model = AutoModel.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-            cache_dir=args.cache_dir if args.cache_dir else None,
-        )
-        model = BiEncoderModel(config, query_model=query_pre_model, context_model = context_pre_model, projection_dim = args.projection_dim)
-    elif args.architecture == 'cross':
-        pre_model = AutoModel.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-            cache_dir=args.cache_dir if args.cache_dir else None,
-        )
-        model = CrossEncoderModel(config, model=pre_model)
-    elif args.architecture == 'cross-default':
-        pre_model = AutoModelForSequenceClassification.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-            cache_dir=args.cache_dir if args.cache_dir else None,
-        )
-        model = CrossEncoderModel(config, model=pre_model)
-    else:
-        raise ValueError("Wrong architecture name")
+    model, tokenizer, config, query_tokenizer, query_config = get_ir_model_attributes(model_name_or_path=args.model_name_or_path,
+                                                                      query_model_name_or_path=args.query_model_name_or_path,
+                                                                      architecture=args.architecture,
+                                                                      projection_dim=args.projection_dim,
+                                                                      do_lower_case=args.do_lower_case)
 
     transform = None
     query_transform = None
     context_transform = None
     if 'cross' in args.architecture:
-        transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=512)
+        transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=args.max_query_passage_length)
     else:
-        query_transform = RankingTransform(tokenizer=tokenizer, max_len=args.max_query_length)
+        query_transform = RankingTransform(tokenizer=query_tokenizer, max_len=args.max_query_length)
         context_transform = RankingTransform(tokenizer=tokenizer, max_len=args.max_passage_length)
 
     logger.info('=' * 80)
@@ -282,6 +250,10 @@ if __name__ == '__main__':
             logger.info("  Starting fine-tuning.")
             model.load_state_dict(torch.load(os.path.join(args.model_name_or_path, 'pytorch_model.pt')))
 
+    if torch.cuda.device_count() > 1:
+        model = nn.DataParallel(model)
+    model.to(device)
+    model.zero_grad()
 
     #
     #loss_function = nn.BCEWithLogitsLoss()
@@ -293,20 +265,7 @@ if __name__ == '__main__':
         loss_function = BiEncoderBCELoss()
     else:
         loss_function = nn.BCELoss()
-    #
-    # if args.use_checkpoint:
-    #     checkpoint = torch.load(os.path.join(args.checkpoint_dir, args.checkpoint_file))
-    #     model.load_state_dict(checkpoint['model_state_dict'])
-    #     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    #     scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    #     epoch_start = checkpoint['epoch']
-    #     loss = checkpoint['loss']
-    #
-    if torch.cuda.device_count() > 1:
-        model = nn.DataParallel(model)
-    model.to(device)
 
-    model.zero_grad()
     train_iterator = trange(
         epochs_trained, int(args.num_train_epochs), desc="Epoch", disable=False
     )
@@ -358,29 +317,38 @@ if __name__ == '__main__':
                     # Take care of distributed/parallel training
                     #pre_model_to_save = pre_model.module if hasattr(pre_model, "module") else pre_model
                     #pre_model_to_save.save_pretrained(output_dir)
-                    tokenizer.save_pretrained(output_dir)
-                    config.save_pretrained(output_dir)
-                    checkpoint_save_path = os.path.join(output_dir,'pytorch_model.pt')
+                    tokenizer.save_pretrained(os.path.join(output_dir, constants.PRE_MODEL_FOLDER))
+                    config.save_pretrained(os.path.join(output_dir, constants.PRE_MODEL_FOLDER))
+                    if args.architecture == 'bi':
+                        query_tokenizer.save_pretrained(os.path.join(output_dir, constants.QUERY_PRE_MODEL_FOLDER))
+                        query_config.save_pretrained(os.path.join(output_dir, constants.QUERY_PRE_MODEL_FOLDER))
                     model_to_save = model.module if hasattr(model, "module") else model
                     torch.save({
                         'global_step': global_step,
                         'model_state_dict': model_to_save.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'scheduler_state_dict': scheduler.state_dict(),
-                    }, checkpoint_save_path)
+                    }, os.path.join(output_dir,'pytorch_model.pt'))
                     torch.save(args, os.path.join(output_dir, "training_args.bin"))
                     logger.info("Saving model checkpoint to %s", output_dir)
                     logger.info("Saving optimizer and scheduler states to %s", output_dir)
 
         #pre_model_to_save = pre_model.module if hasattr(pre_model, "module") else pre_model
         #pre_model_to_save.save_pretrained(args.output_dir)
-        tokenizer.save_pretrained(args.output_dir)
-        config.save_pretrained(args.output_dir)
-        checkpoint_save_path = os.path.join(args.output_dir, 'pytorch_model.pt')
+        tokenizer.save_pretrained(pre_model_save_dir)
+        config.save_pretrained(pre_model_save_dir)
+        if args.architecture == 'bi':
+            query_tokenizer.save_pretrained(query_pre_model_save_dir)
+            query_config.save_pretrained(query_pre_model_save_dir)
         model_to_save = model.module if hasattr(model, "module") else model
-        torch.save(model_to_save.state_dict(), checkpoint_save_path)
+        torch.save(model_to_save.state_dict(), os.path.join(args.output_dir, 'pytorch_model.pt'))
         torch.save(args, os.path.join(args.output_dir, "training_args.bin"))
         logger.info("Saving model to %s", args.output_dir)
+        ## Removing checkpoint folders
+        dir_list = glob.iglob(os.path.join(args.output_dir, "checkpoint-*"))
+        for path in dir_list:
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=False, onerror=None)
 
         # add a eval step after each epoch
         if 'cross' in args.architecture == 'cross':

@@ -252,3 +252,20 @@ class BiencoderRankingDataset(Dataset):
     labels_batch = torch.tensor(labels_batch, dtype=torch.long)
     return query_token_ids_list_batch, query_input_masks_list_batch, query_segment_ids_list_batch,\
            contexts_token_ids_list_batch, contexts_input_masks_list_batch, contexts_segment_ids_list_batch, labels_batch, hard_neg_ctx_indices
+
+class SimpleDataset(Dataset):
+  def __init__(self, text_list, transform):
+    self.text_list = text_list
+    self.transform = transform
+
+  def __len__(self):
+    return len(self.text_list)
+
+  def __getitem__(self, indices):
+    if isinstance(indices, (tuple, list)):
+      return [self.__get_single_item__(index) for index in indices]
+    return self.__get_single_item__(indices)
+
+  def __get_single_item__(self, index):
+    id, text = self.text_list[index]
+    return self.transform(text)

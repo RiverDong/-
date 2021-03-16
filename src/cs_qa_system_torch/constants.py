@@ -3,6 +3,9 @@ VOCAB_BASE = 'vocab_base'
 VOCAB_BERT = 'vocab_bert'
 VOCAB_DISTIL_BERT = 'vocab_distil_bert'
 
+PRE_MODEL_FOLDER = 'amzn_pre_model'
+QUERY_PRE_MODEL_FOLDER = 'amzn_query_pre_model'
+
 VOCABS = {
     VOCAB_BASE: {
         'max_size': 30000,
@@ -90,7 +93,8 @@ IR_MODELS = {
     IR_BM25OKAPI: {
         'k1': 3.6,
         'b': 0.6,
-        'delta': 0.0
+        'delta': 0.0,
+        'word_tokenizer_name': 'simple_word_tokenizer'
     }
 }
 
@@ -104,6 +108,9 @@ RANKING_INPUT_DOCUMENT_ID = 'pid'
 RANKING_INPUT_QUERY_NAME = 'query'
 RANKING_INPUT_DOCUMENT_NAME = 'passage'
 RANKING_INPUT_LABEL_NAME = 'label'
+RANKING_SCORE = 'ir_score'
+RERANKING_SCORE = 'ml_score'
+WEIGHTED_RANKING_SCORE = 'model_ir_score'
 ANSWER_EXTRACTION_ANSWER = 'answer'
 RANKING_INPUT_HARD_NEGATIVES = 'hard_negatives'
 

@@ -39,6 +39,9 @@ def _mrr(prediction, actual, n=None):
             break
     return out
 
+def get_mrr(df, n):
+    return df.groupby(constants.RANKING_INPUT_QUERY_ID).apply(
+        lambda x: _mrr(x[constants.WEIGHTED_RANKING_SCORE].tolist(), x[constants.RANKING_INPUT_LABEL_NAME].tolist(), n)).to_frame()
 
 def compute_acc_pr_rec_fs_metric(predictions, actuals, threshold):
     """

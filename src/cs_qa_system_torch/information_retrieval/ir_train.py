@@ -10,7 +10,6 @@ import shutil
 import logging
 
 from ir_loss import BiEncoderNllLoss, BiEncoderBCELoss
-from ir_model import BiEncoderModel, CrossEncoderModel
 from ir_utils import get_ir_model_attributes
 from utils import logging_config
 
@@ -203,7 +202,7 @@ if __name__ == '__main__':
 
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=args.train_batch_size,
-                                  shuffle=True, collate_fn=train_dataset.batchify_join_str)
+                                  shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=args.test_batch_size, shuffle=False,
                                 collate_fn=val_dataset.batchify_join_str)

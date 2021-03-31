@@ -94,7 +94,7 @@ IR_MODELS = {
         'k1': 3.6,
         'b': 0.6,
         'delta': 0.0,
-        'word_tokenizer_name': 'simple_word_tokenizer'
+        'word_tokenizer_name': 'simple_word_tokenizer_no_stopwords_stem'
     }
 }
 

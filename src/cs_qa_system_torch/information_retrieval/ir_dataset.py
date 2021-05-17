@@ -221,8 +221,8 @@ class BiencoderRankingDataset(Dataset):
       query_segment_ids_list_batch += query_segment_ids_list
       query_input_masks_list_batch += query_input_masks_list
 
-      hard_negatives_start_idx = 1
-      hard_negatives_end_idx = 1 + len(contexts_token_ids_list)
+      hard_negatives_start_idx = 0
+      hard_negatives_end_idx = len(contexts_token_ids_list)
       current_ctxs_len = len(contexts_token_ids_list_batch)
 
       labels_batch.append(current_ctxs_len)

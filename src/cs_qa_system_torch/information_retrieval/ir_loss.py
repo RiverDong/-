@@ -39,6 +39,7 @@ class BiEncoderNllLoss(object):
         ctx_vectors: T, #30*768 => 10x30
         positive_idx_per_question: T, # [2,4,7,..30] length = 10
         hard_negatice_idx_per_question: list = None,
+        weight_factor = 0.8
     ):
         """
         Computes nll loss for the given lists of question and ctx vectors.
@@ -47,13 +48,16 @@ class BiEncoderNllLoss(object):
         :return: a tuple of loss value and amount of correct predictions per batch
         """
         scores = self.get_scores(q_vectors, ctx_vectors)
-
         if len(q_vectors.size()) > 1:
             q_num = q_vectors.size(0)
             scores = scores.view(q_num, -1)
 
         softmax_scores = F.log_softmax(scores, dim=1)
-
+        if hard_negatice_idx_per_question is not None:
+            weights = torch.ones([q_vectors.shape[0],ctx_vectors.shape[0]]).cuda()
+            for i,l in enumerate(hard_negatice_idx_per_question):
+                weights[i,l] = 1.0*(1+weight_factor)
+            softmax_scores = softmax_scores*weights
         loss = F.nll_loss(
             softmax_scores,
             positive_idx_per_question,

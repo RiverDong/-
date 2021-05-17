@@ -22,7 +22,7 @@ def cosine_scores(q_vector: T, ctx_vectors: T):
   return F.cosine_similarity(q_vector, ctx_vectors, dim=1)
 
 
-def get_enonding_vector(model, input_ids, attention_mask, segment_ids):
+def get_encoding_vector(model, input_ids, attention_mask, segment_ids):
   if isinstance(model, DistilBertModel):
     vec = model(input_ids=input_ids, attention_mask=attention_mask)[-1]  # (batch_size, sequence_length, hidden_size)
     vec = vec[:, 0]
@@ -49,11 +49,11 @@ class BiEncoderModel(nn.Module):
   def forward(self, query_input_ids, query_attention_mask, query_segment_ids,
               context_input_ids,  context_attention_mask, context_segment_ids):
 
-    query_vec = get_enonding_vector(self.query_model, query_input_ids, query_attention_mask, query_segment_ids)
+    query_vec = get_encoding_vector(self.query_model, query_input_ids, query_attention_mask, query_segment_ids)
     if self.encode_query_proj:
       query_vec = self.encode_query_proj(query_vec)
 
-    context_vec = get_enonding_vector(self.context_model, context_input_ids, context_attention_mask, context_segment_ids)
+    context_vec = get_encoding_vector(self.context_model, context_input_ids, context_attention_mask, context_segment_ids)
     if self.encode_document_proj:
       context_vec = self.encode_document_proj(context_vec)
 

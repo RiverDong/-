@@ -8,21 +8,20 @@ from information_retrieval.ir_utils import load_document_collection, load_rankin
 
 class RankPrediction:
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
     ## Collection path
     ROOT_QASYSTEM_ARTIFACTS = '/data/QAArtifacts/model'
     passage_collection_path = os.path.join(ROOT_QASYSTEM_ARTIFACTS, 'production_collection.json')
 
     ## ranking parameters
     rank_model_name_or_path = 'BM25Okapi'
-    rank_top_n = 10
+    rank_top_n = 100
     rank_inference_batch_size = 512
     rank_model_score_threshold = 0.0
 
     ## reranking parameters
-    do_rerank = True
+    do_rerank = False
     rerank_model_name_or_path = os.path.join(ROOT_QASYSTEM_ARTIFACTS, 'ir_artifacts/rerank_crossencoder_bert/')
     rerank_top_n = 2
     rerank_inference_batch_size = 512

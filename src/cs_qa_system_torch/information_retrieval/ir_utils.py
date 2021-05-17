@@ -14,7 +14,7 @@ from transformers import AutoConfig, AutoTokenizer, AutoModel, AutoModelForSeque
 import constants
 from factory.ir_model_factory import IRModelFactory
 from factory.word_tokenizer_factory import WordTokenizerFactory
-from information_retrieval.ir_model import BiEncoderModel, CrossEncoderModel
+from information_retrieval.ir_model import BiEncoderModel, CrossEncoderModel, get_encoding_vector
 from information_retrieval.ir_loss import dot_product_scores
 from information_retrieval.ir_dataset import SimpleDataset, CombinedInferenceDataset
 from information_retrieval.ir_transform import CombinedRankingTransform, RankingTransform
@@ -164,7 +164,6 @@ def load_ranking_model(model_name_or_path: str, idx_to_doc: List[Tuple[str, str]
         if os.path.exists(model_name_or_path):
             model.load_state_dict(torch.load(os.path.join(model_name_or_path, 'pytorch_model.pt')))
 
-        if torch.cuda.device_count() > 1:
             model = nn.DataParallel(model)
         model.to(device)
 
@@ -187,7 +186,11 @@ def load_ranking_model(model_name_or_path: str, idx_to_doc: List[Tuple[str, str]
             for step, batch in enumerate(context_dataloader, start=1):
                 input_batch = tuple(t.to(device) for t in batch)
                 with torch.no_grad():
-                    context_embeddings.append(model.module.context_model(*input_batch)[-1])
+                    #context_embeddings.append(model.module.context_model(*input_batch)[-1])
+                    context_vec = get_encoding_vector(model.module.context_model,*input_batch)
+                    if model.module.encode_document_proj is not None:
+                        context_vec = model.module.encode_document_proj(context_vec)
+                    context_embeddings.append(context_vec)
             context_embeddings = torch.cat(context_embeddings, dim=0)
     return model, rank_type, query_transform, context_transform, context_embeddings
 
@@ -368,6 +371,7 @@ def result_crossencoder(list_query_doc_tuple, document_collection_tuple, model, 
         df = df[df[constants.RERANKING_SCORE] > rank_threshold_score].reset_index(drop=True)
         df = df.groupby([constants.RANKING_INPUT_QUERY_ID]).apply(
             lambda x: compute_ranking_score(x, top_n, rerank_score_weight)).reset_index(drop=True)
+        df = df.groupby([constants.RANKING_INPUT_QUERY_ID]).apply(lambda x:x.sort_values(by=[constants.WEIGHTED_RANKING_SCORE], ascending=False).head(top_n)).reset_index(drop=True)
     else:
         df[constants.RANKING_SCORE] = prediction_score
         if qrels is not None:
@@ -485,7 +489,10 @@ def predict_biencoder(list_query_tuple, model, query_transform, context_embeddin
         query_input = (torch.tensor(t.reshape(1, -1), dtype=torch.long).to(device) for t in query_transform(query))
         model.eval()
         with torch.no_grad():
-            query_embeddings = model.query_model(*query_input)[-1]
+            #query_embeddings = model.module.query_model(*query_input)[-1]
+            query_embeddings = get_encoding_vector(model.module.query_model, *query_input)
+            if model.module.encode_query_proj is not None:
+                query_embeddings = model.module.encode_query_proj(query_embeddings)
     else:
         # if the input is a list of query tuples with (queryid, query)
         query_dataset = SimpleDataset(list_query_tuple, query_transform)
@@ -494,7 +501,11 @@ def predict_biencoder(list_query_tuple, model, query_transform, context_embeddin
         for step, batch in enumerate(query_dataloader, start=1):
             input_batch = tuple(t.to(device) for t in batch)
             with torch.no_grad():
-                query_embeddings.append(model.module.query_model(*input_batch)[-1])
+                # query_embeddings.append(model.module.query_model(*input_batch)[-1])
+                query_vec = get_encoding_vector(model.module.query_model, *input_batch)
+                if model.module.encode_query_proj is not None:
+                    query_vec = model.module.encode_query_proj(query_vec)
+                query_embeddings.append(query_vec)
         query_embeddings = torch.cat(query_embeddings, dim=0)
 
     scores = dot_product_scores(query_embeddings, context_embeddings)
@@ -519,5 +530,5 @@ def compute_ranking_score(x: pd.DataFrame, top_n: int, rerank_weight: float = 0.
         else:
             x[constants.WEIGHTED_RANKING_SCORE] = rerank_weight * x[constants.RERANKING_SCORE] + (1 - rerank_weight) * (
                     x[constants.RANKING_SCORE] / ir_score_sum)
-    x = x.sort_values(constants.WEIGHTED_RANKING_SCORE, ascending=False).head(top_n)
+    # x = x.sort_values(constants.WEIGHTED_RANKING_SCORE, ascending=False).head(top_n)
     return x

@@ -112,6 +112,7 @@ if __name__ == '__main__':
     parser.add_argument(
         "--use_hard_negatives", action="store_true", help="Set this to the json format train data path file with hard negatives for each query."
     )
+    parser.add_argument("--hard_negatives_weight_factor", default=0.0, type=float, help="weight factor for hard negatives")
 
     parser.add_argument("--max_query_passage_length", default=512, type=int, help='Required for cross encoder')
     parser.add_argument("--max_passage_length", default=384, type=int, help='Not Required for CrossEncoder architecture.It uses max_query_passage_length argument')
@@ -285,9 +286,10 @@ if __name__ == '__main__':
                 inputs_batch = tuple(t.to(device) for t in batch[:-2])
                 labels_batch = batch[-2].to(device)
                 output = model(*inputs_batch)
-                loss = loss_function(*output, labels_batch)
-
-
+                if args.use_hard_negatives and args.hard_negatives_weight_factor > 0:
+                    loss = loss_function(*output, labels_batch, batch[-1], args.hard_negatives_weight_factor)
+                else:
+                    loss = loss_function(*output, labels_batch)
                 if args.n_gpu > 1:
                     loss = loss.mean()  # mean() to average on multi-gpu parallel (not distributed) training
                 if args.gradient_accumulation_steps > 1:

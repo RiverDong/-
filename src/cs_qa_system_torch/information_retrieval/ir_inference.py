@@ -7,25 +7,18 @@ import torch
 
 from information_retrieval.ir_utils import get_ranking_evaluation
 from information_retrieval.ir_metrics import get_mrr
-from utils import logging_config, plot_distr
+from utils import logging_config
 
 logger = logging.getLogger(__name__)
 
 
-
-def display_result(df):
-    all_rr = get_mrr(df, n=50)
-    print('MRR on test set with {0:d} queries is {1:.4f}'.format(df['qid'].nunique(), all_rr.mean().iloc[0]))
-    print('proportion_rank_<=5 on test set with {0:d} queries is {1:.4f}'.format(df['qid'].nunique(),
-                                                                                 (all_rr >= 1 / 5).mean().iloc[0]))
-    print('proportion_rank_<=3 on test set with {0:d} queries is {1:.4f}'.format(df['qid'].nunique(),
-                                                                                 (all_rr >= 1 / 3).mean().iloc[0]))
-    print('proportion_rank_<=2 on test set with {0:d} queries is {1:.4f}'.format(df['qid'].nunique(),
-                                                                                 (all_rr >= 1 / 2).mean().iloc[0]))
-
-    plot_distr(all_rr.iloc[:, 0], os.path.join(args.output_dir, 'prediction_final.pdf'),
-               'Distribution of RR@{:d}'.format(10), (0.1, 0.2, 0.33, 0.5, 1))
-
+def display_result(df, n_mrr=10, proportion_rank_index=None):
+    mrr, proportion_ranks = get_mrr(df, n_mrr, proportion_rank_index)
+    logger.info('\n' * 3 + '=' * 40 + 'Evaluation Metrics' + '=' * 40 + '\n')
+    logger.info('mrr@{}: {}'.format(n_mrr, mrr))
+    for i, rank in enumerate(proportion_rank_index):
+        logger.info('proportion rank@{}: {}'.format(rank, proportion_ranks[i]))
+    logger.info('\n' + '=' * 80 + '\n' * 3)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='This module is used to predict the relevant documents for a '
@@ -38,6 +31,8 @@ if __name__ == '__main__':
     parser.add_argument('--passage_collection_path', type=str, help='path of the passage collection')
     parser.add_argument('--qrels_path', type=str,
                         help='path of the qrels file')
+    parser.add_argument('--overwrite_context_embeddings', action="store_true",
+                        help='Overwrite context embeddings if set to true')
 
     ## Initial Ranking Arguments
     parser.add_argument('--rank_model_name_or_path', type=str, default='BM25Okapi',
@@ -86,21 +81,23 @@ if __name__ == '__main__':
 
     rank_results_df = get_ranking_evaluation(args.qrels_path, args.passage_collection_path,
                                              args.rank_model_name_or_path, args.rank_batch_size, args.rank_top_n,
-                                             args.rank_threshold_score, device)
+                                             args.rank_threshold_score, device,
+                                             overwrite_context_embeddings = args.overwrite_context_embeddings)
 
     rank_results_df.to_csv(os.path.join(args.output_dir, args.prediction_file), sep='\t')
     print('Rank results:\n')
-    display_result(rank_results_df)
+    display_result(rank_results_df, 10, [5,3,2])
 
     if args.do_rerank:
         rerank_results_df = get_ranking_evaluation(rank_results_df, args.passage_collection_path,
                                                    args.rerank_model_name_or_path, args.rerank_batch_size,
                                                    args.rerank_top_n, args.rerank_threshold_score,
-                                                   device, rerank=True, rerank_score_weight = args.rerank_score_weight)
+                                                   device, rerank=True, rerank_score_weight=args.rerank_score_weight,
+                                                   overwrite_context_embeddings = args.overwrite_context_embeddings)
         rerank_results_df.to_csv(os.path.join(args.output_dir, args.prediction_file), sep='\t')
         print('ReRank results:\n')
-        display_result(rerank_results_df)
+        display_result(rerank_results_df, 10, [5,3,2])
 
     if args.only_print_results:
         df = pd.read_csv(os.path.join(args.output_dir, args.prediction_file), sep='\t')
-        display_result(df)
+        display_result(df, 10, [5,3,2])

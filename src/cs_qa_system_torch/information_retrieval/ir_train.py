@@ -8,9 +8,9 @@ import random
 import shutil
 
 import logging
-
-from ir_loss import BiEncoderNllLoss, BiEncoderBCELoss
-from ir_utils import get_ir_model_attributes
+from ir_metrics import get_mrr
+from ir_utils import get_ir_model_attributes, get_ranking_evaluation, get_ir_data_transform, load_document_collection, \
+    get_context_embeddings, evaluate_ranking_model, get_loss_function
 from utils import logging_config
 
 
@@ -18,11 +18,10 @@ from utils import logging_config
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, AutoConfig, AutoModel, AutoModelForSequenceClassification
 from transformers.optimization import AdamW, get_linear_schedule_with_warmup
 
 import constants
-from ir_dataset import RankingDataset, CombinedRankingDataset, BiencoderRankingDataset
+from ir_dataset import RankingDataset, CombinedRankingDataset, BiencoderRankingDataset, MSMARCOTripletDataset
 from ir_transform import RankingTransform, CombinedRankingTransform
 
 logger = logging.getLogger(__name__)
@@ -125,7 +124,7 @@ if __name__ == '__main__':
     parser.add_argument("--num_train_epochs", default=3.0, type=float,
                         help="Total number of training epochs to perform.")
 
-    parser.add_argument("--print_freq", default=500, type=int, help="The frequency to print output")
+    parser.add_argument("--print_freq", default=100, type=int, help="The frequency to print output")
     parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X updates steps.")
 
 
@@ -151,8 +150,9 @@ if __name__ == '__main__':
 
     # Setup logging
     logging_config(args.output_dir, name='train')
+    logger.info('\n'*3 + '=' * 80 + '\n')
     logger.info("The input args are: \n{}".format(args))
-
+    logger.info('\n' + '=' * 80 + '\n'*3)
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
@@ -164,54 +164,73 @@ if __name__ == '__main__':
     if args.query_model_name_or_path and not os.path.exists(query_pre_model_save_dir):
         os.makedirs(query_pre_model_save_dir)
 
+    logger.info('\n'*3 + '=' * 80 + '\n')
     logger.info("The Model artifacts will be saved to: {}".format(args.output_dir))
-
+    logger.info('\n' + '=' * 80 + '\n'*3)
 
     ## init dataset and ir model
     model, tokenizer, config, query_tokenizer, query_config = get_ir_model_attributes(model_name_or_path=args.model_name_or_path,
                                                                       query_model_name_or_path=args.query_model_name_or_path,
                                                                       architecture=args.architecture,
                                                                       projection_dim=args.projection_dim,
-                                                                      do_lower_case=args.do_lower_case)
+                                                                      do_lower_case=args.do_lower_case,
+                                                                      device = device)
 
-    transform = None
-    query_transform = None
-    context_transform = None
-    if 'cross' in args.architecture:
-        transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=args.max_query_passage_length)
-    else:
-        query_transform = RankingTransform(tokenizer=query_tokenizer, max_len=args.max_query_length)
-        context_transform = RankingTransform(tokenizer=tokenizer, max_len=args.max_passage_length)
+    transform, query_transform = get_ir_data_transform(args.architecture, tokenizer, query_tokenizer,
+                                                       args.max_query_passage_length, args.max_query_length, args.max_passage_length)
 
-    logger.info('=' * 80)
+    logger.info('\n'*3 + '=' * 80 + '\n')
     logger.info('Train dir: {}'.format(args.train_data_path))
     logger.info('Output dir: {}'.format(args.output_dir))
-    logger.info('=' * 80)
+    logger.info('\n' + '=' * 80 + '\n'*3)
 
-    if 'cross' in args.architecture:
+    if args.architecture == 'cross':
         train_dataset = CombinedRankingDataset(args.train_data_path, transform)
         val_dataset = CombinedRankingDataset(args.test_data_path, transform)
-    else:
+        train_dataloader = DataLoader(train_dataset,
+                                      batch_size=args.train_batch_size,
+                                      shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
+        val_dataloader = DataLoader(val_dataset,
+                                    batch_size=args.test_batch_size, shuffle=False,
+                                    collate_fn=val_dataset.batchify_join_str)
+    elif args.architecture == 'bi':
         if args.use_hard_negatives:
             train_dataset = BiencoderRankingDataset(args.train_data_path,
-                                           query_transform, context_transform)
+                                           query_transform, transform)
         else:
             train_dataset = RankingDataset(args.train_data_path,
-                                           query_transform, context_transform)
+                                           query_transform, transform)
         val_dataset = RankingDataset(args.test_data_path,
-                                         query_transform, context_transform)
+                                         query_transform, transform)
+        train_dataloader = DataLoader(train_dataset,
+                                      batch_size=args.train_batch_size,
+                                      shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
+        val_dataloader = DataLoader(val_dataset,
+                                    batch_size=args.test_batch_size, shuffle=False,
+                                    collate_fn=val_dataset.batchify_join_str)
+    elif args.architecture == 'bi-msmarco-triplet':
+        train_dataset = MSMARCOTripletDataset(collection_filepath = os.path.join(os.path.dirname(args.train_data_path), 'collection.tsv'),
+                                              queries_filepath = os.path.join(os.path.dirname(args.train_data_path), 'queries.train.tsv'),
+                                              qidpidtriples_filepath = args.train_data_path,
+                                              query_transform = query_transform,
+                                              context_transform = transform)
+        MSMARCOTripletDataset.msmarco_create_dev_data_from_triplets(collection_filepath = os.path.join(os.path.dirname(args.test_data_path), 'collection.tsv'),
+                                              queries_filepath = os.path.join(os.path.dirname(args.test_data_path), 'queries.train.tsv'),
+                                              triplet_filepath = args.test_data_path,
+                                              num_dev_queries = 500,
+                                              num_max_dev_negatives = 200)
+        train_dataloader = DataLoader(train_dataset,
+                                      batch_size=args.train_batch_size,
+                                      shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
+    else:
+        raise ValueError("Wrong architecture name")
 
-    train_dataloader = DataLoader(train_dataset,
-                                  batch_size=args.train_batch_size,
-                                  shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
-    val_dataloader = DataLoader(val_dataset,
-                                batch_size=args.test_batch_size, shuffle=False,
-                                collate_fn=val_dataset.batchify_join_str)
     t_total = len(train_dataloader) // args.gradient_accumulation_steps  * args.num_train_epochs
-    # tr_total = int(
-    #     train_dataset.__len__() / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
     print_freq = args.print_freq
-    logger.info('Print freq:'.format(print_freq))
+    logger.info('\n'*3 + '=' * 80 + '\n')
+    logger.info('print freq steps: {}'.format(print_freq))
+    logger.info('checkpoint save steps: {}'.format(args.save_steps))
+    logger.info('\n' + '=' * 80 + '\n'*3)
 
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
@@ -237,8 +256,11 @@ if __name__ == '__main__':
             global_step = int(checkpoint_suffix)
             epochs_trained = global_step // (len(train_dataloader) // args.gradient_accumulation_steps)
             steps_trained_in_current_epoch = global_step % (len(train_dataloader) // args.gradient_accumulation_steps)
-            checkpoint = torch.load(os.path.join(args.model_name_or_path, 'pytorch_model.pt'))
-            model.load_state_dict(checkpoint['model_state_dict'])
+            checkpoint = torch.load(os.path.join(args.model_name_or_path, 'pytorch_model.pt'), map_location=device)
+            if hasattr(model, "module"):
+                model.module.load_state_dict(checkpoint['model_state_dict'])
+            else:
+                model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
@@ -248,41 +270,36 @@ if __name__ == '__main__':
             logger.info("  Will skip the first %d steps in the first epoch", steps_trained_in_current_epoch)
         except ValueError:
             logger.info("  Starting fine-tuning.")
-            model.load_state_dict(torch.load(os.path.join(args.model_name_or_path, 'pytorch_model.pt')))
+            if hasattr(model, "module"):
+                model.module.load_state_dict(torch.load(os.path.join(args.model_name_or_path, 'pytorch_model.pt'), map_location=device))
+            else:
+                model.load_state_dict(torch.load(os.path.join(args.model_name_or_path, 'pytorch_model.pt'), map_location=device))
 
-    if torch.cuda.device_count() > 1:
-        model = nn.DataParallel(model)
-    model.to(device)
-    model.zero_grad()
 
-    #
-    #loss_function = nn.BCEWithLogitsLoss()
-    if args.loss == 'BCE':
-        loss_function = nn.BCELoss()
-    elif args.loss == 'BiEncoderNLL':
-        loss_function = BiEncoderNllLoss()
-    elif args.loss == 'BiEncoderBCE':
-        loss_function = BiEncoderBCELoss()
-    else:
-        loss_function = nn.BCELoss()
+
+    #define the loss function to use
+    loss_function = get_loss_function(args.loss)
 
     train_iterator = trange(
         epochs_trained, int(args.num_train_epochs), desc="Epoch", disable=False
     )
 
+    model.zero_grad()
     for epoch in train_iterator:
         tr_loss = 0
         nb_tr_examples, nb_tr_steps = 0, 0
         with tqdm(total=len(train_dataloader)) as bar:
             for step, batch in enumerate(train_dataloader):
-
                 # Skip past any already trained steps if resuming training
                 if steps_trained_in_current_epoch > 0:
                     steps_trained_in_current_epoch -= 1
                     continue
 
                 model.train()
-                optimizer.zero_grad()
+
+                ##### Make changes based on New Architectures ############
+                # Input_batch and label_batch is based on defined dataset and corresponding batchify
+                # make sure model output and inputs passed to lss function are accurate
                 inputs_batch = tuple(t.to(device) for t in batch[:-2])
                 labels_batch = batch[-2].to(device)
                 output = model(*inputs_batch)
@@ -290,37 +307,32 @@ if __name__ == '__main__':
                     loss = loss_function(*output, labels_batch, batch[-1], args.hard_negatives_weight_factor)
                 else:
                     loss = loss_function(*output, labels_batch)
+                ###### END of changes based on new Architecture ###############
                 if args.n_gpu > 1:
                     loss = loss.mean()  # mean() to average on multi-gpu parallel (not distributed) training
                 if args.gradient_accumulation_steps > 1:
                     loss = loss / args.gradient_accumulation_steps
 
-                tr_loss += loss.item()
+                tr_loss += loss.item() # .item() function copies to cpu and converts the tensory to plain python number
                 nb_tr_examples += inputs_batch[0].size(0)
                 nb_tr_steps += 1
 
-
                 loss.backward()
-                if (step + 1) % args.gradient_accumulation_steps == 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-
-                optimizer.step()
-                scheduler.step()
 
                 global_step += 1
 
+                ## Update progress bar
                 if print_freq > 0 and global_step % print_freq == 0:
                     bar.update(min(print_freq, step))
-                    logger.info('global step: {},\t total_loss: {}\n'.format(global_step, tr_loss / nb_tr_steps))
+                    logger.info('global step: {},\tepoch: {},\tnumber_of_training_samples: {},'
+                                '\ttotal_loss: {}\n'.format(global_step, epoch, nb_tr_examples, tr_loss / nb_tr_steps))
 
+                ## Save check points
                 if args.save_steps > 0 and global_step % args.save_steps == 0:
                     output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
-                    # Take care of distributed/parallel training
-                    #pre_model_to_save = pre_model.module if hasattr(pre_model, "module") else pre_model
-                    #pre_model_to_save.save_pretrained(output_dir)
                     tokenizer.save_pretrained(os.path.join(output_dir, constants.PRE_MODEL_FOLDER))
                     config.save_pretrained(os.path.join(output_dir, constants.PRE_MODEL_FOLDER))
-                    if args.architecture == 'bi':
+                    if 'bi' in args.architecture:
                         query_tokenizer.save_pretrained(os.path.join(output_dir, constants.QUERY_PRE_MODEL_FOLDER))
                         query_config.save_pretrained(os.path.join(output_dir, constants.QUERY_PRE_MODEL_FOLDER))
                     model_to_save = model.module if hasattr(model, "module") else model
@@ -334,17 +346,22 @@ if __name__ == '__main__':
                     logger.info("Saving model checkpoint to %s", output_dir)
                     logger.info("Saving optimizer and scheduler states to %s", output_dir)
 
-        #pre_model_to_save = pre_model.module if hasattr(pre_model, "module") else pre_model
-        #pre_model_to_save.save_pretrained(args.output_dir)
+                if (step + 1) % args.gradient_accumulation_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad()
+
+        ## Saving the model after each epoch
         tokenizer.save_pretrained(pre_model_save_dir)
         config.save_pretrained(pre_model_save_dir)
-        if args.architecture == 'bi':
+        if 'bi' in args.architecture:
             query_tokenizer.save_pretrained(query_pre_model_save_dir)
             query_config.save_pretrained(query_pre_model_save_dir)
         model_to_save = model.module if hasattr(model, "module") else model
         torch.save(model_to_save.state_dict(), os.path.join(args.output_dir, 'pytorch_model.pt'))
         torch.save(args, os.path.join(args.output_dir, "training_args.bin"))
-        logger.info("Saving model to %s", args.output_dir)
+        logger.info("Saving model to {} after epoch {}".format(args.output_dir, epoch))
         ## Removing checkpoint folders
         dir_list = glob.iglob(os.path.join(args.output_dir, "checkpoint-*"))
         for path in dir_list:
@@ -352,23 +369,40 @@ if __name__ == '__main__':
                 shutil.rmtree(path, ignore_errors=False, onerror=None)
 
         # add a eval step after each epoch
-        if 'cross' in args.architecture == 'cross':
-            eval_loss_function = nn.BCELoss()
-        else:
-            eval_loss_function = BiEncoderBCELoss()
-        val_result = eval_running_model(val_dataloader,loss_fct=eval_loss_function)
-        logger.info('Epoch {}, Global Step {} VAL res:{}\n'.format(epoch, global_step, val_result))
-        logger.info(str(val_result) + '\n')
+        if os.path.isfile(os.path.join(os.path.dirname(args.test_data_path), 'dev-collection.json')):
+            logger.info('Evaluating the model on dev set. Collection : {},\nqrels : {}'.format(os.path.join(os.path.dirname(args.test_data_path), 'dev-collection.json'),
+                                                                                               os.path.join( os.path.dirname(args.test_data_path),'dev-qrels.json')))
+            dev_collection_ir, dev_idx_to_doc, dev_doc_to_idx, _ = load_document_collection(os.path.join(os.path.dirname(args.test_data_path), 'dev-collection.json'))
+            dev_collection_tuple = (dev_collection_ir, dev_idx_to_doc, dev_doc_to_idx)
+            transform, query_transform = get_ir_data_transform(args.architecture, tokenizer, query_tokenizer,
+                                                               args.max_query_passage_length, args.max_query_length,
+                                                               args.max_passage_length,
+                                                               bool_np_array=True)
+            context_embeddings = get_context_embeddings(dev_idx_to_doc, transform, model, args.architecture, args.test_batch_size, device)
+            dev_top_n = 10
+            dev_rank_threshold_score = 0.0
+            dev_rerank = False
+            dev_rerank_score_weight = 0.5
+            n_mrr = 10
+            proportion_rank_index = [5,3,2]
+            rank_results_df = evaluate_ranking_model(os.path.join(os.path.dirname(args.test_data_path), 'dev-qrels.json'),
+                                                     dev_collection_tuple,
+                                                     args.architecture,
+                                                     model,
+                                                     dev_top_n,
+                                                     query_transform,
+                                                     transform,
+                                                     context_embeddings,
+                                                     args.test_batch_size,
+                                                     device,
+                                                     dev_rank_threshold_score,
+                                                     dev_rerank,
+                                                     dev_rerank_score_weight)
 
-        # if val_result['eval_loss'] <= best_eval_loss:
-        #     best_eval_loss = val_result['eval_loss']
-        #     val_result['best_eval_loss'] = best_eval_loss
-        #     # save model
-        #     print('[Saving model at]', state_save_path)
-        #     log_wf.write('[Saving model at] %s\n' % state_save_path)
-        #     torch.save(model.module.state_dict(), state_save_path)
-
-
-
-        logger.info('global step: {},\t total_loss: {}\n'.format(global_step, tr_loss / nb_tr_steps))
+            mrr, proportion_ranks = get_mrr(rank_results_df, n_mrr, proportion_rank_index)
+            logger.info('\n' * 3 + '=' * 40 + 'Evaluation Metrics' + '=' * 40 + '\n')
+            logger.info('mrr@{}: {}'.format(n_mrr,mrr))
+            for i,rank in enumerate(proportion_rank_index):
+                logger.info('proportion rank@{}: {}'.format(rank, proportion_ranks[i]))
+            logger.info('\n' + '=' * 80 + '\n' * 3)
 

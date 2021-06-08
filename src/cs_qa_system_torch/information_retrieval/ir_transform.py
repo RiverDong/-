@@ -58,16 +58,6 @@ class CombinedRankingTransform(object):
                                                 return_attention_mask=True,
                                                 return_token_type_ids=True)
     input_ids, attention_mask, segment_ids = tokenized_dict['input_ids'], tokenized_dict['attention_mask'], tokenized_dict['token_type_ids']
-    # segment_ids = [1] * len(input_ids)
-    #
-    # if len(input_ids) >= self.max_len:
-    #     input_ids = input_ids[:self.max_len - 1] + [self.sep_id]
-    #     segment_ids = segment_ids[:self.max_len]
-    #     input_masks = input_masks[:self.max_len]
-    #
-    # input_ids += [self.pad_id] * (self.max_len - len(input_ids))
-    # segment_ids += [0] * (self.max_len - len(segment_ids))
-    # input_masks += [0] * (self.max_len - len(input_masks))
 
     assert len(input_ids) == self.max_len
     assert len(segment_ids) == self.max_len

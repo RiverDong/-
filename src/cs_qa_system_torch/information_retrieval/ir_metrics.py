@@ -39,9 +39,19 @@ def _mrr(prediction, actual, n=None):
             break
     return out
 
-def get_mrr(df, n):
-    return df.groupby(constants.RANKING_INPUT_QUERY_ID).apply(
+def get_mrr(df, n, list_precision_n):
+    reciprocal_rank_df =  df.groupby(constants.RANKING_INPUT_QUERY_ID).apply(
         lambda x: _mrr(x[constants.WEIGHTED_RANKING_SCORE].tolist(), x[constants.RANKING_INPUT_LABEL_NAME].tolist(), n)).to_frame()
+    mrr_n = reciprocal_rank_df.iloc[:,0].mean()
+    if list_precision_n is not None:
+        list_proportion_rank = []
+        for i in list_precision_n:
+            if i>0:
+                list_proportion_rank.append((reciprocal_rank_df.iloc[:,0]>=1.0/i).mean())
+            else:
+                list_proportion_rank.append(0)
+        return mrr_n, tuple(list_proportion_rank)
+    return mrr_n
 
 def compute_acc_pr_rec_fs_metric(predictions, actuals, threshold):
     """

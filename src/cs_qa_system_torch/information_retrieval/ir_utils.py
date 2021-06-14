@@ -16,7 +16,7 @@ import constants
 from factory.ir_model_factory import IRModelFactory
 from factory.word_tokenizer_factory import WordTokenizerFactory
 from information_retrieval.ir_model import BiEncoderModel, CrossEncoderModel, get_encoding_vector, SingleEncoderModel
-from information_retrieval.ir_loss import dot_product_scores, BiEncoderNllLoss, BiEncoderBCELoss
+from information_retrieval.ir_loss import dot_product_scores, BiEncoderNllLoss, BiEncoderBCELoss, TripletLoss
 from information_retrieval.ir_dataset import SimpleDataset, CombinedInferenceDataset
 from information_retrieval.ir_transform import CombinedRankingTransform, RankingTransform
 
@@ -110,7 +110,7 @@ def get_ir_model_attributes(model_name_or_path,
                 model_name_or_path,
                 config=config,
             )
-        model = SingleEncoderModel(config, model=pre_model)
+        model = SingleEncoderModel(config, model=pre_model, projection_dim=projection_dim)
         if device.type == 'cuda':
             model = nn.DataParallel(model)
             model.to(device)
@@ -147,12 +147,14 @@ def get_loss_function(loss_name):
         loss_function = BiEncoderNllLoss()
     elif loss_name == 'BiEncoderBCE':
         loss_function = BiEncoderBCELoss()
+    elif loss_name == 'TripletLoss':
+        loss_function = TripletLoss()
     else:
         loss_function = nn.BCELoss()
     return loss_function
 
 def get_context_embeddings(idx_to_doc, context_transform, model, architecture, batch_size, device,
-                           context_embeddings_path = None, overwrite=False):
+                           context_embeddings_path=None, overwrite=False):
     context_embeddings = None
     context_embeddings_temp = None
     context_proj = None
@@ -169,7 +171,7 @@ def get_context_embeddings(idx_to_doc, context_transform, model, architecture, b
         context_dataset = SimpleDataset(idx_to_doc, context_transform)
         context_dataloader = DataLoader(context_dataset, batch_size=batch_size)
         if device.type == 'cuda':
-            context_model = model.module.context_model
+            context_model = model.module.context_model if 'bi' in architecture else model.module.model
             context_model = nn.DataParallel(context_model)
             context_model.to(device)
             context_proj = model.module.encode_document_proj if 'bi' in architecture else model.module.encode_proj
@@ -177,7 +179,7 @@ def get_context_embeddings(idx_to_doc, context_transform, model, architecture, b
                 context_proj = nn.DataParallel(context_proj)
                 context_proj.to(device)
         else:
-            context_model = model.context_model
+            context_model = model.context_model if 'bi' in architecture else model.model
             context_proj = model.encode_document_proj if 'bi' in architecture else model.encode_proj
 
         with tqdm(total=len(context_dataloader)) as pbar:
@@ -199,7 +201,7 @@ def get_context_embeddings(idx_to_doc, context_transform, model, architecture, b
                         if context_embeddings is None:
                             context_embeddings = context_embeddings_temp.detach().cpu()
                         else:
-                            context_embeddings = torch.cat((context_embeddings, context_embeddings.detach().cpu()))
+                            context_embeddings = torch.cat((context_embeddings, context_embeddings_temp.detach().cpu()))
                         context_embeddings_temp = None
                         torch.cuda.empty_cache()
             if context_embeddings_temp is not None:
@@ -210,8 +212,11 @@ def get_context_embeddings(idx_to_doc, context_transform, model, architecture, b
                 context_embeddings_temp = None
                 torch.cuda.empty_cache()
 
-            if context_embeddings_path is not None:
-                torch.save(context_embeddings, os.path.join(context_embeddings_path,'context_embeddings.pt'))
+            if context_embeddings_path is not None and overwrite:
+                if not os.path.exists(context_embeddings_path):
+                    os.makedirs(context_embeddings_path)
+
+                torch.save(context_embeddings, os.path.join(context_embeddings_path, 'context_embeddings.pt'))
 
     return context_embeddings
 
@@ -238,7 +243,7 @@ def load_document_collection(collection_path: str):
 
 def load_ranking_model(model_name_or_path: str, idx_to_doc: List[Tuple[str, str]], device: torch,
                        inference_batch_size: int = 512, model_architecture=None, max_query_passage_length=384,
-                       max_query_length=32, max_passage_length=384, embeddings_overwrite = False):
+                       max_query_length=32, max_passage_length=384, context_embeddings_path=None, embeddings_overwrite=False):
     """
     :param model_name_or_path: path to trained ranking model. NOTE: This path should contain training_args.bin file containing all training arguments
     :param idx_to_doc: list of documents in the collection
@@ -297,7 +302,7 @@ def load_ranking_model(model_name_or_path: str, idx_to_doc: List[Tuple[str, str]
                                                            bool_np_array=True)
 
     context_embeddings = get_context_embeddings(idx_to_doc, transform, model, architecture, inference_batch_size,
-                                                device, model_name_or_path, embeddings_overwrite)
+                                                device, context_embeddings_path, embeddings_overwrite)
 
     return model, architecture, query_transform, transform, context_embeddings
 
@@ -307,7 +312,8 @@ def get_ranking_evaluation(qrels_path_or_data_frame: str, passage_collection_pat
                            rerank: bool = False,
                            rerank_score_weight: float = 0.5, model_architecture=None,
                            max_query_passage_length=384, max_query_length=32, max_passage_length=384,
-                           overwrite_context_embeddings = False):
+                           context_embeddings_path=None,
+                           overwrite_context_embeddings=False):
     """
     :param qrels_path_or_data_frame: This could be a path to qrels files containing (queryid, query, relevant documentid) as json which can be read by pandas read json
                                      This could also be a dataframe containing (queryid, query, docid, document, score) that is used for predicting
@@ -323,7 +329,7 @@ def get_ranking_evaluation(qrels_path_or_data_frame: str, passage_collection_pat
     collection_ir, idx_to_doc, doc_to_idx, _ = load_document_collection(passage_collection_path)
     collection_tuple = (collection_ir, idx_to_doc, doc_to_idx)
 
-    model, architecuture, query_transform, context_transform, context_embeddings = load_ranking_model(
+    model, architecture, query_transform, context_transform, context_embeddings = load_ranking_model(
         model_name_or_path=model_name_or_path,
         idx_to_doc=idx_to_doc,
         device=device,
@@ -332,9 +338,10 @@ def get_ranking_evaluation(qrels_path_or_data_frame: str, passage_collection_pat
         max_query_passage_length=max_query_passage_length,
         max_query_length=max_query_length,
         max_passage_length=max_passage_length,
+        context_embeddings_path=context_embeddings_path,
         embeddings_overwrite=overwrite_context_embeddings)
 
-    rank_results_df = evaluate_ranking_model(qrels_path_or_data_frame, collection_tuple, architecuture, model, top_n,
+    rank_results_df = evaluate_ranking_model(qrels_path_or_data_frame, collection_tuple, architecture, model, top_n,
                                              query_transform,
                                              context_transform, context_embeddings, inference_batch_size, device,
                                              rank_threshold_score, rerank=rerank,
@@ -342,7 +349,7 @@ def get_ranking_evaluation(qrels_path_or_data_frame: str, passage_collection_pat
     return rank_results_df
 
 
-def evaluate_ranking_model(qrels_path_or_data_frame, document_collection_tuple, architecuture, model, top_n,
+def evaluate_ranking_model(qrels_path_or_data_frame, document_collection_tuple, architecture, model, top_n,
                            query_transform,
                            context_transform, context_embeddings, inference_batch_size, device,
                            rank_threshold_score=0.0,
@@ -353,7 +360,7 @@ def evaluate_ranking_model(qrels_path_or_data_frame, document_collection_tuple, 
                                      the ranking for the given documents in the dataframe (Usually used for reranking)
     :param document_collection_tuple: A tuple containing (<document collection dictionary with key as docid and value as processed ir document>,
                                                           <list of documents as index to document>, <dictionary of document to index>)
-    :param architecuture: has values 'BM25', 'bi', 'cross'
+    :param architecture: has values 'BM25', 'bi', 'cross'
     :param model: ranking model object
     :params top_n: top n documents to be returned for each query
     :param query_transform: query transform funcntion to use if its a biencoder architecture and needed to transform each query
@@ -387,21 +394,20 @@ def evaluate_ranking_model(qrels_path_or_data_frame, document_collection_tuple, 
             name=constants.RANKING_INPUT_DOCUMENT_ID).reset_index()
         list_query_tuple = list(
             qrels[[constants.RANKING_INPUT_QUERY_ID, constants.RANKING_INPUT_QUERY_NAME]].to_records(index=False))
+    if 'cross' in architecture:
         list_query_doc_tuple = [(qid, pid, query, passage, 0.0) for (qid, query) in list_query_tuple for
                                 (pid, passage) in idx_to_doc]
-
-    if 'cross' in architecuture:
         df = result_crossencoder(list_query_doc_tuple, document_collection_tuple, model, context_transform,
                                  inference_batch_size,
                                  top_n, rank_threshold_score, device, qrels=qrels, rerank=rerank,
                                  rerank_score_weight=rerank_score_weight,
                                  label_list=label_list)
 
-    elif 'BM25' in architecuture:
+    elif 'BM25' in architecture:
         df = result_bm25(list_query_tuple, document_collection_tuple, model, top_n, rank_threshold_score, qrels=qrels,
                          rerank=rerank)
-    elif 'bi' in architecuture or 'single' in architecuture:
-        df = result_biencoder(list_query_tuple, document_collection_tuple, model, query_transform, context_embeddings,
+    elif 'bi' in architecture or 'single' in architecture:
+        df = result_biencoder(list_query_tuple, document_collection_tuple, model, architecture, query_transform, context_embeddings,
                               inference_batch_size, top_n, rank_threshold_score, device, qrels=qrels, rerank=rerank)
     else:
         raise NotImplementedError
@@ -409,7 +415,7 @@ def evaluate_ranking_model(qrels_path_or_data_frame, document_collection_tuple, 
     return df
 
 
-def predict_ranking_model(list_or_data_frame, document_collection_tuple, architecuture, model, top_n, query_transform,
+def predict_ranking_model(list_or_data_frame, document_collection_tuple, architecture, model, top_n, query_transform,
                           context_transform, context_embeddings, inference_batch_size, rank_threshold_score, device,
                           rerank=False, rerank_score_weight=0.5):
     """
@@ -418,7 +424,7 @@ def predict_ranking_model(list_or_data_frame, document_collection_tuple, archite
                                      the ranking for the given documents in the dataframe (Usually used for reranking)
     :param document_collection_tuple: A tuple containing (<document collection dictionary with key as docid and value as processed ir document>,
                                                           <list of documents as index to document>, <dictionary of document to index>)
-    :param architecuture: has values 'BM25', 'bi', 'cross'
+    :param architecture: has values 'BM25', 'bi', 'cross'
     :param model: ranking model object
     :params top_n: top n documents to be returned for each query
     :param query_transform: query transform funcntion to use if its a biencoder architecture and needed to transform each query
@@ -451,18 +457,18 @@ def predict_ranking_model(list_or_data_frame, document_collection_tuple, archite
         else:
             raise TypeError("input has to be a query string or a list of (queryid,query) tuples")
 
-    if 'cross' in architecuture:
+    if 'cross' in architecture:
         df = result_crossencoder(list_query_doc_tuple, document_collection_tuple, model, context_transform,
                                  inference_batch_size,
                                  top_n, rank_threshold_score, device, qrels=None, rerank=rerank,
                                  rerank_score_weight=rerank_score_weight,
                                  label_list=None)
 
-    elif 'BM25' in architecuture:
+    elif 'BM25' in architecture:
         df = result_bm25(list_query_tuple, document_collection_tuple, model, top_n, rank_threshold_score, qrels=None,
                          rerank=rerank)
-    elif 'bi' in architecuture or 'single' in architecuture:
-        df = result_biencoder(list_query_tuple, document_collection_tuple, model, query_transform, context_embeddings,
+    elif 'bi' in architecture or 'single' in architecture:
+        df = result_biencoder(list_query_tuple, document_collection_tuple, model, architecture, query_transform, context_embeddings,
                               inference_batch_size, top_n, rank_threshold_score, device, qrels=None, rerank=rerank)
     else:
         raise NotImplementedError
@@ -543,13 +549,13 @@ def result_bm25(list_query_tuple, document_collection_tuple, model, top_n, rank_
     return df
 
 
-def result_biencoder(list_query_tuple, document_collection_tuple, model, query_transform, context_embeddings,
+def result_biencoder(list_query_tuple, document_collection_tuple, model, architecture, query_transform, context_embeddings,
                      rank_batch_size, top_n, rank_threshold_score, device, qrels=None, rerank=False):
     if rerank:
         raise NotImplementedError
 
     collection_ir, idx_to_doc, doc_to_idx = document_collection_tuple
-    prediction = predict_biencoder(list_query_tuple, model, query_transform, context_embeddings, rank_batch_size, top_n,
+    prediction = predict_biencoder(list_query_tuple, model, architecture, query_transform, context_embeddings, rank_batch_size, top_n,
                                    device)
 
     if isinstance(list_query_tuple, str):
@@ -602,23 +608,22 @@ def predict_crossencoder(list_query_doc_tuple, model, context_transform, inferen
     return prediction_score_list
 
 
-def predict_biencoder(list_query_tuple, model, query_transform, context_embeddings, inference_batch_size, top_n,
+def predict_biencoder(list_query_tuple, model, architecture, query_transform, context_embeddings, inference_batch_size, top_n,
                       device):
     query_embeddings = None
     query_embeddings_temp = None
     query_proj = None
     if device.type == 'cuda':
-        query_model = model.module.query_model
+        query_model = model.module.query_model if 'bi' in architecture else model.module.model
         query_model = nn.DataParallel(query_model)
         query_model.to(device)
-        if model.module.encode_query_proj is not None:
-            query_proj = model.module.encode_query_proj
+        query_proj = model.module.encode_query_proj if 'bi' in architecture else model.module.encode_proj
+        if query_proj is not None:
             query_proj = nn.DataParallel(query_proj)
             query_proj.to(device)
     else:
-        query_model = model.query_model
-        if model.encode_query_proj is not None:
-            query_proj = model.encode_query_proj
+        query_model = model.query_model if 'bi' in architecture else model.module.model
+        query_proj = model.encode_query_proj if 'bi' in architecture else model.encode_proj
     if isinstance(list_query_tuple, str):
         # if the input is a single query with string
         query = list_query_tuple
@@ -664,14 +669,76 @@ def predict_biencoder(list_query_tuple, model, query_transform, context_embeddin
                     query_embeddings = torch.cat((query_embeddings, query_embeddings_temp.detach().cpu()))
                 query_embeddings_temp = None
                 torch.cuda.empty_cache()
+    logger.info('Computing scores')
+    prediction = []
+    prev_query = 0
+    jump_query = 40
+    for q in tqdm(range(jump_query, len(query_embeddings) + jump_query, jump_query)):
+        if q == (len(query_embeddings) // jump_query + 1) * jump_query:
+            curr_query = len(query_embeddings)
+        else:
+            curr_query = q
+        prev_context = 0
+        jump_context = 100000
+        score_vec = None
+        torch.cuda.empty_cache()
+        for c in range(jump_context, len(context_embeddings) + jump_context, jump_context):
+            if c == (len(context_embeddings) // jump_context + 1) * jump_context:
+                curr_context = len(context_embeddings)
+            else:
+                curr_context = c
+            scores = dot_product_scores(query_embeddings[prev_query:curr_query, :].to(device),
+                                        context_embeddings[prev_context:curr_context, :].to(device))
+            if score_vec is None:
+                score_vec = scores
+            else:
+                score_vec = torch.cat((score_vec, scores), dim=1)
+            scores = None
+            torch.cuda.empty_cache()
+            prev_context = curr_context
+        scores = None
+        torch.cuda.empty_cache()
+        softmax_score = F.softmax(score_vec, dim=1)
+        score_vec = None
+        torch.cuda.empty_cache()
+        output = torch.sort(softmax_score, dim=1, descending=True)
+        softmax_score = None
+        torch.cuda.empty_cache()
+        values = output[0][:, 0:top_n].tolist()
+        indices = output[1][:, 0:top_n].tolist()
+        prediction.extend([list(zip(i[0], i[1])) for i in zip(indices, values)])
+        output = None
+        torch.cuda.empty_cache()
+        prev_query = curr_query
 
-
-    scores = dot_product_scores(query_embeddings, context_embeddings)
-    sotmax_scores = F.softmax(scores, dim=1)
-    output = torch.sort(sotmax_scores, dim=1, descending=True)
-    values = output[0][:, 0:top_n].tolist()
-    indices = output[1][:, 0:top_n].tolist()
-    prediction = [list(zip(i[0], i[1])) for i in zip(indices, values)]
+    # if len(context_embeddings) < 500000:
+    #     logger.info('Computing scores')
+    #     scores = dot_product_scores(query_embeddings, context_embeddings)
+    #     sotmax_scores = F.softmax(scores, dim=1)
+    #     output = torch.sort(sotmax_scores, dim=1, descending=True)
+    #     values = output[0][:, 0:top_n].tolist()
+    #     indices = output[1][:, 0:top_n].tolist()
+    #     prediction = [list(zip(i[0], i[1])) for i in zip(indices, values)]
+    # else:
+    #     prediction = []
+    #     prev = 0
+    #     jump = 500
+    #     logger.info('Computing scores by looping group of 500 query (context_embedding is large)')
+    #     for i in tqdm(range(jump,len(query_embeddings),jump)):
+    #         curr = i
+    #         scores = dot_product_scores(query_embeddings[prev:curr,:], context_embeddings)
+    #         sotmax_scores = F.softmax(scores, dim=1)
+    #         output = torch.sort(sotmax_scores, dim=1, descending=True)
+    #         values = output[0][:, 0:top_n].tolist()
+    #         indices = output[1][:, 0:top_n].tolist()
+    #         prediction.extend([list(zip(i[0], i[1])) for i in zip(indices, values)])
+    #         prev = curr
+    #     scores = dot_product_scores(query_embeddings[curr:len(query_embeddings),:], context_embeddings)
+    #     sotmax_scores = F.softmax(scores, dim=1)
+    #     output = torch.sort(sotmax_scores, dim=1, descending=True)
+    #     values = output[0][:, 0:top_n].tolist()
+    #     indices = output[1][:, 0:top_n].tolist()
+    #     prediction.extend([list(zip(i[0], i[1])) for i in zip(indices, values)])
     return prediction
 
 

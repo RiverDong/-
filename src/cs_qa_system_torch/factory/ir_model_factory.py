@@ -86,7 +86,7 @@ class BM25(object):
         # Get the word-passage frequency array (self.freq_array). It is an n * m array, where n is the total word
         # count, m is the total passage count, the (i, j)th entry is the number of times word i occurs in passage j
         # (i and j are the indices in self.word2idx and self.idx2pid)
-        # This array is sparse and consists of small integers, so here we use a sparse matrix with dtype "uint32" to
+        # This array is sparse and consists of small integers, so here we use a sparse matrix with dtype "uint8" to
         # reduce the memory
         tic = time.time()
         col = list()
@@ -96,16 +96,16 @@ class BM25(object):
             for word, freq in passage_info[i][2].items():
                 col.append(i)
                 row.append(self.word2idx[word])
-                if freq >= 4294967296:
+                if freq >= 256:
                     # print('The word "{0:}" occurs {1:d} times in passage with pid {2:d}, '
-                    #       'and we truncate its occurrence frequency to 4294967295'.format(word, freq, self.idx2pid[i]))
-                    freq = 4294967295
+                    #       'and we truncate its occurrence frequency to 255'.format(word, freq, self.idx2pid[i]))
+                    freq = 255
                 data.append(freq)
-        self.freq_array = csr_matrix((data, (row, col)), dtype='uint32')
+        self.freq_array = csr_matrix((data, (row, col)), dtype='uint8')
         toc = time.time()
         # print('freq_array obtained in {:.2f} second(s)'.format(toc - tic))
 
-        assert (self.freq_array.toarray().sum(axis=0) == self.word_count_array).all()
+        # assert (self.freq_array.toarray().sum(axis=0) == self.word_count_array).all()
         assert (self.freq_array.toarray()[0] == 0).all()
 
     def _get_passage_info(self, passage_tuple):

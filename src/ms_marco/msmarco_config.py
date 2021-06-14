@@ -4,7 +4,7 @@ ROOT_PATH = '/data/QAData/MSMARCO'
 PASSAGE_FILE = 'collection.tsv'
 QUERIES_TRAIN = 'queries.train.tsv'
 QRELS_TRAIN = 'qrels.train.tsv'
-QID_PID_REL_NONREL_PAIRS = 'qidpidtriples.train.full.tsv'
+QID_PID_REL_NONREL_PAIRS = 'qidpidtriples.train.full.2.tsv'
 
 QUERIES_DEV = 'queries.dev.tsv'
 QRELS_DEV = 'qrels.dev.tsv'

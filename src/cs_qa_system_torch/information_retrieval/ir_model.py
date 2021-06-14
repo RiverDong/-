@@ -21,6 +21,13 @@ def cosine_scores(q_vector: T, ctx_vectors: T):
   # q_vector: n1 x D, ctx_vectors: n2 x D, result n1 x n2
   return F.cosine_similarity(q_vector, ctx_vectors, dim=1)
 
+#Mean Pooling - Take attention mask into account for correct averaging
+def mean_pooling(model_output, attention_mask):
+  token_embeddings = model_output[0]  # First element of model_output contains all token embeddings
+  input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+  sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
+  sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+  return sum_embeddings / sum_mask
 
 def get_encoding_vector(model, input_ids, attention_mask, segment_ids):
   if hasattr(model, "module"):
@@ -28,8 +35,8 @@ def get_encoding_vector(model, input_ids, attention_mask, segment_ids):
   else:
     model_core = model
   if isinstance(model_core, DistilBertModel):
-    vec = model(input_ids=input_ids, attention_mask=attention_mask)[-1]  # (batch_size, sequence_length, hidden_size)
-    vec = vec[:, 0]
+    output = model(input_ids=input_ids, attention_mask=attention_mask)  # (batch_size, sequence_length, hidden_size)
+    vec = mean_pooling(output, attention_mask)
   elif isinstance(model_core, ElectraModel):
     vec = model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=segment_ids)[-1]  # (batch_size, sequence_length, hidden_size)
     vec = vec[:, 0]
@@ -91,7 +98,7 @@ class SingleEncoderModel(nn.Module):
   def __init__(self, config, *inputs, **kwargs):
     super().__init__()
     self.model = kwargs['model']
-    self.project_dim = kwargs['projection_dim']
+    self.project_dim = kwargs['projection_dim'] if 'projection_dim' in kwargs.keys() else 0
     self.encode_proj = (nn.Linear(config.hidden_size, self.project_dim) if self.project_dim != 0 else None)
 
   def forward(self, query_input_ids, query_attention_mask, query_segment_ids,

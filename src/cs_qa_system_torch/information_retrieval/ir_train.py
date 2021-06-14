@@ -9,7 +9,7 @@ import shutil
 
 import logging
 from ir_metrics import get_mrr
-from ir_utils import get_ir_model_attributes, get_ranking_evaluation, get_ir_data_transform, load_document_collection, \
+from ir_utils import get_ir_model_attributes, get_ir_data_transform, load_document_collection, \
     get_context_embeddings, evaluate_ranking_model, get_loss_function
 from utils import logging_config
 
@@ -186,28 +186,19 @@ if __name__ == '__main__':
 
     if args.architecture == 'cross':
         train_dataset = CombinedRankingDataset(args.train_data_path, transform)
-        val_dataset = CombinedRankingDataset(args.test_data_path, transform)
         train_dataloader = DataLoader(train_dataset,
                                       batch_size=args.train_batch_size,
                                       shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
-        val_dataloader = DataLoader(val_dataset,
-                                    batch_size=args.test_batch_size, shuffle=False,
-                                    collate_fn=val_dataset.batchify_join_str)
-    elif args.architecture == 'bi':
+    elif args.architecture == 'bi' or args.architecture == 'single':
         if args.use_hard_negatives:
             train_dataset = BiencoderRankingDataset(args.train_data_path,
                                            query_transform, transform)
         else:
             train_dataset = RankingDataset(args.train_data_path,
                                            query_transform, transform)
-        val_dataset = RankingDataset(args.test_data_path,
-                                         query_transform, transform)
         train_dataloader = DataLoader(train_dataset,
                                       batch_size=args.train_batch_size,
                                       shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
-        val_dataloader = DataLoader(val_dataset,
-                                    batch_size=args.test_batch_size, shuffle=False,
-                                    collate_fn=val_dataset.batchify_join_str)
     elif args.architecture == 'bi-msmarco-triplet':
         train_dataset = MSMARCOTripletDataset(collection_filepath = os.path.join(os.path.dirname(args.train_data_path), 'collection.tsv'),
                                               queries_filepath = os.path.join(os.path.dirname(args.train_data_path), 'queries.train.tsv'),

@@ -78,3 +78,35 @@ class BiEncoderNllLoss(object):
     @staticmethod
     def get_similarity_function():
         return dot_product_scores
+
+
+import torch.tensor as T
+
+
+class TripletLoss(object):
+    def __call__(
+            self,
+            q_vectors: T,  # (batch_sizex768)
+            ctx_vectors: T,  # (2*batch_sizex768)
+            positive_idx_per_question: T,
+            margin=0.3
+    ):
+        scores = self.get_euclidean_distance(q_vectors, ctx_vectors)
+        if len(q_vectors.size()) > 1:
+            q_num = q_vectors.size(0)
+            scores = scores.view(q_num, -1)
+        distance_matrix = torch.zeros((len(q_vectors), 2))
+        for i in range(len(q_vectors)):
+            distance_matrix[i, 0:2] = scores[i, 2 * i:2 * i + 2]
+        loss = distance_matrix[:, 0] - distance_matrix[:, 1] + margin
+        loss[loss<0] = 0
+        loss = loss.mean()
+        return loss
+
+    def get_cosinesimilarity_distance(self, q_vector, ctx_vector):
+        q_vector = F.normalize(q_vector, dim=1)
+        ctx_vector = F.normalize(ctx_vector, dim=1)
+        return torch.matmul(q_vector, torch.transpose(ctx_vector, 0, 1))
+
+    def get_euclidean_distance(self, q_vector, ctx_vector):
+        return torch.cdist(q_vector, ctx_vector)

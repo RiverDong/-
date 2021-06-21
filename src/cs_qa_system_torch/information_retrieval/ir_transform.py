@@ -12,22 +12,37 @@ class RankingTransform(object):
 
   def __call__(self, text):
     if isinstance(text, list):
+        # tokenized_dict = self.tokenizer.batch_encode_plus(text,
+        #                                         add_special_tokens=True,
+        #                                         max_length=self.max_len,
+        #                                         pad_to_max_length=True,
+        #                                         truncation=True,
+        #                                         return_attention_mask=True,
+        #                                         return_token_type_ids=True)
         tokenized_dict = self.tokenizer.batch_encode_plus(text,
-                                                add_special_tokens=True,
                                                 max_length=self.max_len,
-                                                pad_to_max_length=True,
+                                                padding=True,
                                                 truncation=True,
                                                 return_attention_mask=True,
-                                                return_token_type_ids=True)
+                                                return_token_type_ids=True,
+                                                return_tensors='pt')
     else:
+        # tokenized_dict = self.tokenizer.encode_plus(text,
+        #                                         text_pair=None,
+        #                                         add_special_tokens=True,
+        #                                         max_length=self.max_len,
+        #                                         pad_to_max_length=True,
+        #                                         truncation=True,
+        #                                         return_attention_mask=True,
+        #                                         return_token_type_ids=True)
         tokenized_dict = self.tokenizer.encode_plus(text,
-                                                text_pair=None,
-                                                add_special_tokens=True,
-                                                max_length=self.max_len,
-                                                pad_to_max_length=True,
-                                                truncation=True,
-                                                return_attention_mask=True,
-                                                return_token_type_ids=True)
+                                                    text_pair=None,
+                                                    max_length=self.max_len,
+                                                    padding=True,
+                                                    truncation=True,
+                                                    return_attention_mask=True,
+                                                    return_token_type_ids=True,
+                                                    return_tensors='pt')
     input_ids, attention_mask, segment_ids = tokenized_dict['input_ids'], tokenized_dict['attention_mask'], tokenized_dict['token_type_ids']
 
     if self.bool_np_array:

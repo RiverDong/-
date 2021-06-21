@@ -39,7 +39,7 @@ if __name__ == '__main__':
     ## Initial Ranking Arguments
     parser.add_argument('--rank_model_name_or_path', type=str, default='BM25Okapi',
                         help='name of the information retrieval model to use')
-    parser.add_argument('--rank_model_narchitecture', type=str, default=None,
+    parser.add_argument('--rank_model_architecture', type=str, default=None,
                         help='when using external architectures to load use this as either [bi,cross or single]')
     parser.add_argument("--rank_batch_size", default=128, type=int,
                         help="The batch size to use for each ranking inference")
@@ -56,7 +56,7 @@ if __name__ == '__main__':
     )
     parser.add_argument('--rerank_model_name_or_path', type=str, default='BM25Okapi',
                         help='name of the information retrieval model to use')
-    parser.add_argument('--rerank_model_narchitecture', type=str, default=None,
+    parser.add_argument('--rerank_model_architecture', type=str, default=None,
                         help='when using external architectures to load use this as either [bi,cross or single]')
     parser.add_argument("--rerank_batch_size", default=128, type=int,
                         help="The batch size to use for each ranking inference")
@@ -88,7 +88,7 @@ if __name__ == '__main__':
     rank_results_df = get_ranking_evaluation(args.qrels_path, args.passage_collection_path,
                                              args.rank_model_name_or_path, args.rank_batch_size, args.rank_top_n,
                                              args.rank_threshold_score, device,
-                                             model_architecture=args.rank_model_narchitecture,
+                                             model_architecture=args.rank_model_architecture,
                                              context_embeddings_path=args.context_embeddings_path if args.context_embeddings_path is not None else args.output_dir,
                                              overwrite_context_embeddings = args.overwrite_context_embeddings)
 
@@ -101,7 +101,7 @@ if __name__ == '__main__':
                                                    args.rerank_model_name_or_path, args.rerank_batch_size,
                                                    args.rerank_top_n, args.rerank_threshold_score,
                                                    device, rerank=True, rerank_score_weight=args.rerank_score_weight,
-                                                   model_architecture=args.rerank_model_narchitecture)
+                                                   model_architecture=args.rerank_model_architecture)
         rerank_results_df.to_csv(os.path.join(args.output_dir, args.prediction_file), sep='\t')
         print('ReRank results:\n')
         display_result(rerank_results_df, 10, [5,3,2])

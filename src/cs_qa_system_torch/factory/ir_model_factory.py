@@ -106,7 +106,7 @@ class BM25(object):
         # print('freq_array obtained in {:.2f} second(s)'.format(toc - tic))
 
         # assert (self.freq_array.toarray().sum(axis=0) == self.word_count_array).all()
-        assert (self.freq_array.toarray()[0] == 0).all()
+        # assert (self.freq_array.toarray()[0] == 0).all()
 
     def _get_passage_info(self, passage_tuple):
         """

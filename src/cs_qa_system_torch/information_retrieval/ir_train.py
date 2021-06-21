@@ -8,6 +8,8 @@ import random
 import shutil
 
 import logging
+
+from ir_datasets import MultipleNegativeDataset
 from ir_metrics import get_mrr
 from ir_utils import get_ir_model_attributes, get_ir_data_transform, load_document_collection, \
     get_context_embeddings, evaluate_ranking_model, get_loss_function
@@ -21,7 +23,8 @@ from torch.utils.data import DataLoader
 from transformers.optimization import AdamW, get_linear_schedule_with_warmup
 
 import constants
-from ir_dataset import RankingDataset, CombinedRankingDataset, BiencoderRankingDataset, MSMARCOTripletDataset
+from ir_dataset import RankingDataset, CombinedRankingDataset
+from ir_datasets import MSMARCOTripletDataset
 from ir_transform import RankingTransform, CombinedRankingTransform
 
 logger = logging.getLogger(__name__)
@@ -191,15 +194,18 @@ if __name__ == '__main__':
                                       shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
     elif args.architecture == 'bi' or args.architecture == 'single':
         if args.use_hard_negatives:
-            train_dataset = BiencoderRankingDataset(args.train_data_path,
+            train_dataset = MultipleNegativeDataset(args.train_data_path,
                                            query_transform, transform)
+            train_dataloader = DataLoader(train_dataset,
+                                          batch_size=args.train_batch_size,
+                                          shuffle=True, collate_fn=train_dataset.batchify, drop_last=True)
         else:
             train_dataset = RankingDataset(args.train_data_path,
                                            query_transform, transform)
-        train_dataloader = DataLoader(train_dataset,
+            train_dataloader = DataLoader(train_dataset,
                                       batch_size=args.train_batch_size,
                                       shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
-    elif args.architecture == 'bi-msmarco-triplet':
+    elif args.architecture == 'bi-msmarco-triplet' or args.architecture == 'single-msmarco-triplet':
         train_dataset = MSMARCOTripletDataset(collection_filepath = os.path.join(os.path.dirname(args.train_data_path), 'collection.tsv'),
                                               queries_filepath = os.path.join(os.path.dirname(args.train_data_path), 'queries.train.tsv'),
                                               qidpidtriples_filepath = args.train_data_path,
@@ -212,7 +218,7 @@ if __name__ == '__main__':
                                               num_max_dev_negatives = 200)
         train_dataloader = DataLoader(train_dataset,
                                       batch_size=args.train_batch_size,
-                                      shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
+                                      shuffle=True, collate_fn=train_dataset.batchify, drop_last=True)
     else:
         raise ValueError("Wrong architecture name")
 

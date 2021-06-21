@@ -17,8 +17,9 @@ from factory.ir_model_factory import IRModelFactory
 from factory.word_tokenizer_factory import WordTokenizerFactory
 from information_retrieval.ir_model import BiEncoderModel, CrossEncoderModel, get_encoding_vector, SingleEncoderModel
 from information_retrieval.ir_loss import dot_product_scores, BiEncoderNllLoss, BiEncoderBCELoss, TripletLoss
-from information_retrieval.ir_dataset import SimpleDataset, CombinedInferenceDataset
+from information_retrieval.ir_dataset import CombinedInferenceDataset
 from information_retrieval.ir_transform import CombinedRankingTransform, RankingTransform
+from information_retrieval.ir_datasets import TextSequenceDataset
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ def get_ir_model_attributes(model_name_or_path,
             pre_model = AutoModel.from_config(config)
         else:
             config = AutoConfig.from_pretrained(model_name_or_path)
-            tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, do_lower_case=do_lower_case)
+            tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
             pre_model = AutoModel.from_pretrained(
                 model_name_or_path,
                 config=config,
@@ -168,8 +169,8 @@ def get_context_embeddings(idx_to_doc, context_transform, model, architecture, b
             return context_embeddings
 
         logger.info('*************Computing context embeddings*****************\n')
-        context_dataset = SimpleDataset(idx_to_doc, context_transform)
-        context_dataloader = DataLoader(context_dataset, batch_size=batch_size)
+        context_dataset = TextSequenceDataset(idx_to_doc, context_transform)
+        context_dataloader = DataLoader(context_dataset, collate_fn=context_dataset.batchify, batch_size=batch_size)
         if device.type == 'cuda':
             context_model = model.module.context_model if 'bi' in architecture else model.module.model
             context_model = nn.DataParallel(context_model)
@@ -196,8 +197,8 @@ def get_context_embeddings(idx_to_doc, context_transform, model, architecture, b
                         context_embeddings_temp = context_vec
                     else:
                         context_embeddings_temp = torch.cat((context_embeddings_temp, context_vec))
-                    # if tensor is greater than 3GB then copy to cpu
-                    if (context_embeddings_temp.element_size() * context_embeddings_temp.nelement() / 1024 ** 3) > 0.5:
+                    # if tensor is greater than 500MB   then copy to cpus
+                    if (context_embeddings_temp.element_size() * context_embeddings_temp.nelement() / 1024 ** 3) > 0.1:
                         if context_embeddings is None:
                             context_embeddings = context_embeddings_temp.detach().cpu()
                         else:
@@ -287,8 +288,7 @@ def load_ranking_model(model_name_or_path: str, idx_to_doc: List[Tuple[str, str]
                                                            params.max_query_passage_length if 'max_query_passage_length' in vars(
                                                                params).keys() else 384,
                                                            params.max_query_length,
-                                                           params.max_passage_length,
-                                                           bool_np_array=True)
+                                                           params.max_passage_length)
     elif not os.path.exists(model_name_or_path) and model_architecture is not None:
         architecture = model_architecture
         model, tokenizer, config, query_tokenizer, query_config = get_ir_model_attributes(
@@ -298,8 +298,7 @@ def load_ranking_model(model_name_or_path: str, idx_to_doc: List[Tuple[str, str]
         transform, query_transform = get_ir_data_transform(model_architecture, tokenizer, query_tokenizer,
                                                            max_query_passage_length,
                                                            max_query_length,
-                                                           max_passage_length,
-                                                           bool_np_array=True)
+                                                           max_passage_length)
 
     context_embeddings = get_context_embeddings(idx_to_doc, transform, model, architecture, inference_batch_size,
                                                 device, context_embeddings_path, embeddings_overwrite)
@@ -394,9 +393,10 @@ def evaluate_ranking_model(qrels_path_or_data_frame, document_collection_tuple, 
             name=constants.RANKING_INPUT_DOCUMENT_ID).reset_index()
         list_query_tuple = list(
             qrels[[constants.RANKING_INPUT_QUERY_ID, constants.RANKING_INPUT_QUERY_NAME]].to_records(index=False))
+        if 'cross' in architecture:
+            list_query_doc_tuple = [(qid, pid, query, passage, 0.0) for (qid, query) in list_query_tuple for
+                                    (pid, passage) in idx_to_doc]
     if 'cross' in architecture:
-        list_query_doc_tuple = [(qid, pid, query, passage, 0.0) for (qid, query) in list_query_tuple for
-                                (pid, passage) in idx_to_doc]
         df = result_crossencoder(list_query_doc_tuple, document_collection_tuple, model, context_transform,
                                  inference_batch_size,
                                  top_n, rank_threshold_score, device, qrels=qrels, rerank=rerank,
@@ -636,8 +636,8 @@ def predict_biencoder(list_query_tuple, model, architecture, query_transform, co
                 query_embeddings = query_proj(query_embeddings)
     else:
         # if the input is a list of query tuples with (queryid, query)
-        query_dataset = SimpleDataset(list_query_tuple, query_transform)
-        query_dataloader = DataLoader(query_dataset, batch_size=inference_batch_size, shuffle=False)
+        query_dataset = TextSequenceDataset(list_query_tuple, query_transform)
+        query_dataloader = DataLoader(query_dataset, collate_fn=query_dataset.batchify, batch_size=inference_batch_size, shuffle=False)
         logger.info("********Computing Query Embeddings*******************")
         with tqdm(total=len(query_dataloader)) as pbar:
             for step, batch in enumerate(query_dataloader, start=1):

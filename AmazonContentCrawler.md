@@ -221,8 +221,8 @@ with open('node_id_added_from_top160', 'rb') as f:
 ```python
 # queries = top_answers.head(10)['query'].to_list()
 # ## s3 initialize
-# os.environ['AWS_ACCESS_KEY_ID']='AKIAUOVCCZMYRCESLFEO'
-# os.environ['AWS_SECRET_ACCESS_KEY']='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'
+# os.environ['AWS_ACCESS_KEY_ID']='<ACCESS KEY>'
+# os.environ['AWS_SECRET_ACCESS_KEY']='<SECRET KEY>'
 # BUCKET_NAME_INPUT='qabot-annotation-input-ir-b'
 # s3_client = boto3.client('s3')
 

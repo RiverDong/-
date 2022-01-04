@@ -54,6 +54,13 @@ def get_answer_list(answers):
             out_alist.append([answer, ''])
     return out_alist
 
+def adjust_url(url):
+    if len(url.strip()) == 0:
+        return url
+    if url.startswith('http://') or url.startswith('https://'):
+        return url
+    else:
+        return 'https://'+ url
 
 def reformat_answer(text, help_page_url, title, max_ans_len=247):
     if text == '':
@@ -92,5 +99,5 @@ def reformat_answer(text, help_page_url, title, max_ans_len=247):
 
     formatted_answer = [open_bubble] + formatted_answer + [close_bubble]
 
-    final_answer = [vars(Blurb('ANSWER', blurb[0], blurb[1], blurb[1])) for blurb in formatted_answer]
+    final_answer = [vars(Blurb('ANSWER', blurb[0], adjust_url(blurb[1]), adjust_url(blurb[1]))) for blurb in formatted_answer if len(blurb[0].split()) > 2]
     return final_answer

@@ -1,21 +1,11 @@
 import glob
 import os
-import time
 import argparse
 import numpy as np
 from tqdm import tqdm, trange
 import random
 import shutil
-
 import logging
-
-from ir_datasets import MultipleNegativeDataset
-from ir_metrics import get_mrr
-from ir_utils import get_ir_model_attributes, get_ir_data_transform, load_document_collection, \
-    get_context_embeddings, evaluate_ranking_model, get_loss_function
-from utils import logging_config
-
-
 
 import torch
 import torch.nn as nn
@@ -23,9 +13,12 @@ from torch.utils.data import DataLoader
 from transformers.optimization import AdamW, get_linear_schedule_with_warmup
 
 import constants
-from ir_dataset import RankingDataset, CombinedRankingDataset
-from ir_datasets import MSMARCOTripletDataset
-from ir_transform import RankingTransform, CombinedRankingTransform
+from ir_datasets import TSVBinaryClassifierRankingDataset, MSMARCOTripletDataset, JsonMultipleNegativeDataset
+from ir_metrics import get_mrr
+from ir_utils import get_ir_model_attributes, get_ir_data_transform, load_document_collection, \
+    get_context_embeddings, evaluate_ranking_model, get_loss_function, load_ranking_model
+from utils import logging_config
+
 
 logger = logging.getLogger(__name__)
 
@@ -35,41 +28,6 @@ def set_seed(args):
     torch.manual_seed(args.seed)
     if args.gpu != '':
       torch.cuda.manual_seed_all(args.seed)
-
-
-def eval_running_model(dataloader, threshold=0.5, loss_fct=nn.BCELoss()):
-    model.eval()
-    eval_loss, eval_hit_times = 0, 0
-    nb_eval_steps, nb_eval_examples = 0, 0
-    for eval_step, eval_batch in enumerate(dataloader, start=1):
-        input_batch = tuple(t.to(device) for t in eval_batch[:-2])
-        label_batch = eval_batch[-2].to(device)
-        with torch.no_grad():
-            out = model(*input_batch)
-            e_loss = loss_fct(*out, label_batch)
-
-        if isinstance(out,tuple):
-            if len(out) > 1:
-                scores = torch.sum(out[0] * out[1], dim=1)
-            else:
-                scores = out[0]
-        else:
-            scores = out
-        eval_hit_times += torch.sum((scores >= threshold).float())
-        eval_loss += e_loss.sum()
-
-        nb_eval_examples += label_batch.size(0)
-        nb_eval_steps += 1
-    eval_loss = eval_loss / nb_eval_steps
-    eval_accuracy = eval_hit_times*1.0 / nb_eval_examples
-    result = {
-        'train_loss': tr_loss / nb_tr_steps,
-        'eval_loss': eval_loss,
-        'eval_accuracy': eval_accuracy,
-        'epoch': epoch,
-        'global_step': global_step,
-    }
-    return result
 
 
 if __name__ == '__main__':
@@ -87,33 +45,11 @@ if __name__ == '__main__':
                                                                                    "Biencoder "
                                                                                    "as query encoder")
 
-    parser.add_argument(
-        "--config_name", default="", type=str, help="Pretrained config name or path if not the same as model_name"
-    )
-    parser.add_argument(
-        "--tokenizer_name",
-        default="",
-        type=str,
-        help="Pretrained tokenizer name or path if not the same as model_name",
-    )
-    parser.add_argument(
-        "--cache_dir",
-        default="",
-        type=str,
-        help="Where do you want to store the pre-trained models downloaded from s3",
-    )
-    parser.add_argument(
-        "--do_lower_case", action="store_true", help="Set this flag if you are using an uncased model."
-    )
-
-    parser.add_argument("--architecture", required=True, type=str, help='[bi, cross]')
+    parser.add_argument("--architecture", required=True, type=str, help='[bi, single, cross]')
     parser.add_argument("--projection_dim", default=0, type=int, help="Extra linear layer on top of standard bert/roberta encoder")
 
     parser.add_argument("--train_data_path", default='data', type=str)
     parser.add_argument("--test_data_path", default='data', type=str)
-    parser.add_argument(
-        "--use_hard_negatives", action="store_true", help="Set this to the json format train data path file with hard negatives for each query."
-    )
     parser.add_argument("--hard_negatives_weight_factor", default=0.0, type=float, help="weight factor for hard negatives")
 
     parser.add_argument("--max_query_passage_length", default=512, type=int, help='Required for cross encoder')
@@ -136,10 +72,13 @@ if __name__ == '__main__':
     parser.add_argument("--warmup_steps", default=2000, type=float)
     parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
+
     parser.add_argument("--loss", default='BCE', type=str, help = "['BCE', 'BiEncoderNLL', BiEncoderBCE]")
 
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
+
+
     args = parser.parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
@@ -176,7 +115,6 @@ if __name__ == '__main__':
                                                                       query_model_name_or_path=args.query_model_name_or_path,
                                                                       architecture=args.architecture,
                                                                       projection_dim=args.projection_dim,
-                                                                      do_lower_case=args.do_lower_case,
                                                                       device = device)
 
     transform, query_transform = get_ir_data_transform(args.architecture, tokenizer, query_tokenizer,
@@ -187,24 +125,25 @@ if __name__ == '__main__':
     logger.info('Output dir: {}'.format(args.output_dir))
     logger.info('\n' + '=' * 80 + '\n'*3)
 
-    if args.architecture == 'cross':
-        train_dataset = CombinedRankingDataset(args.train_data_path, transform)
+    if args.loss == 'BCE':
+        train_dataset = TSVBinaryClassifierRankingDataset(args.train_data_path,
+                                                          query_transform, transform)
         train_dataloader = DataLoader(train_dataset,
                                       batch_size=args.train_batch_size,
-                                      shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
-    elif args.architecture == 'bi' or args.architecture == 'single':
-        if args.use_hard_negatives:
-            train_dataset = MultipleNegativeDataset(args.train_data_path,
+                                      shuffle=True, collate_fn=train_dataset.batchify, drop_last=True)
+        TSVBinaryClassifierRankingDataset.create_dev_data(args.test_data_path,
+                                                          num_dev_queries=500,
+                                                          num_max_dev_negatives=200)
+    elif args.loss == 'WHNS':
+        train_dataset = JsonMultipleNegativeDataset(args.train_data_path, args.hard_negatives_weight_factor,
                                            query_transform, transform)
-            train_dataloader = DataLoader(train_dataset,
+        train_dataloader = DataLoader(train_dataset,
                                           batch_size=args.train_batch_size,
                                           shuffle=True, collate_fn=train_dataset.batchify, drop_last=True)
-        else:
-            train_dataset = RankingDataset(args.train_data_path,
-                                           query_transform, transform)
-            train_dataloader = DataLoader(train_dataset,
-                                      batch_size=args.train_batch_size,
-                                      shuffle=True, collate_fn=train_dataset.batchify_join_str, drop_last=True)
+        TSVBinaryClassifierRankingDataset.create_dev_data(args.test_data_path,
+                                                          num_dev_queries=500,
+                                                          num_max_dev_negatives=200)
+
     elif args.architecture == 'bi-msmarco-triplet' or args.architecture == 'single-msmarco-triplet':
         train_dataset = MSMARCOTripletDataset(collection_filepath = os.path.join(os.path.dirname(args.train_data_path), 'collection.tsv'),
                                               queries_filepath = os.path.join(os.path.dirname(args.train_data_path), 'queries.train.tsv'),
@@ -275,7 +214,7 @@ if __name__ == '__main__':
 
 
     #define the loss function to use
-    loss_function = get_loss_function(args.loss)
+    loss_function = get_loss_function(args.loss, args.architecture)
 
     train_iterator = trange(
         epochs_trained, int(args.num_train_epochs), desc="Epoch", disable=False
@@ -297,13 +236,10 @@ if __name__ == '__main__':
                 ##### Make changes based on New Architectures ############
                 # Input_batch and label_batch is based on defined dataset and corresponding batchify
                 # make sure model output and inputs passed to lss function are accurate
-                inputs_batch = tuple(t.to(device) for t in batch[:-2])
-                labels_batch = batch[-2].to(device)
+                inputs_batch = tuple(t.to(device) for t in batch[0])
+                labels_batch = tuple(t.to(device) for t in batch[1])
                 output = model(*inputs_batch)
-                if args.use_hard_negatives and args.hard_negatives_weight_factor > 0:
-                    loss = loss_function(*output, labels_batch, batch[-1], args.hard_negatives_weight_factor)
-                else:
-                    loss = loss_function(*output, labels_batch)
+                loss = loss_function(*output, *labels_batch, *batch[2])
                 ###### END of changes based on new Architecture ###############
                 if args.n_gpu > 1:
                     loss = loss.mean()  # mean() to average on multi-gpu parallel (not distributed) training
@@ -373,8 +309,7 @@ if __name__ == '__main__':
             dev_collection_tuple = (dev_collection_ir, dev_idx_to_doc, dev_doc_to_idx)
             transform, query_transform = get_ir_data_transform(args.architecture, tokenizer, query_tokenizer,
                                                                args.max_query_passage_length, args.max_query_length,
-                                                               args.max_passage_length,
-                                                               bool_np_array=True)
+                                                               args.max_passage_length)
             context_embeddings = get_context_embeddings(dev_idx_to_doc, transform, model, args.architecture, args.test_batch_size, device)
             dev_top_n = 10
             dev_rank_threshold_score = 0.0
@@ -382,7 +317,46 @@ if __name__ == '__main__':
             dev_rerank_score_weight = 0.5
             n_mrr = 10
             proportion_rank_index = [5,3,2]
-            rank_results_df = evaluate_ranking_model(os.path.join(os.path.dirname(args.test_data_path), 'dev-qrels.json'),
+            if 'cross' in args.architecture:
+                # Ranking with BM25
+                rank_model_name_or_path = constants.IR_BM25OKAPI
+                rank_model, rank_architecture, _, _,_ = load_ranking_model(
+                    model_name_or_path=rank_model_name_or_path,
+                    idx_to_doc=dev_idx_to_doc,
+                    device=device)
+                rank_results_df = evaluate_ranking_model(
+                    qrels_path_or_data_frame=os.path.join(os.path.dirname(args.test_data_path), 'dev-qrels.json'),
+                    document_collection_tuple=dev_collection_tuple,
+                    architecture=rank_architecture,
+                    model=rank_model,
+                    top_n=dev_top_n,
+                    query_transform=None,
+                    context_transform=None,
+                    context_embeddings=None,
+                    inference_batch_size=args.test_batch_size,
+                    device=device,
+                    rank_threshold_score=dev_rank_threshold_score,
+                    rerank=False,
+                    rerank_score_weight=dev_rerank_score_weight)
+
+                # Reranking with cross-architecture
+                rank_results_df = evaluate_ranking_model(
+                    qrels_path_or_data_frame=rank_results_df,
+                    document_collection_tuple=dev_collection_tuple,
+                    architecture=args.architecture,
+                    model=model,
+                    top_n=dev_top_n,
+                    query_transform=query_transform,
+                    context_transform=transform,
+                    context_embeddings=None,
+                    inference_batch_size=args.test_batch_size,
+                    device=device,
+                    rank_threshold_score=dev_rank_threshold_score,
+                    rerank=True,
+                    rerank_score_weight=dev_rerank_score_weight)
+
+            else:
+                rank_results_df = evaluate_ranking_model(os.path.join(os.path.dirname(args.test_data_path), 'dev-qrels.json'),
                                                      dev_collection_tuple,
                                                      args.architecture,
                                                      model,

@@ -9,10 +9,97 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 import constants
+import csv
 
 logger = logging.getLogger(__name__)
 
-class TextSequenceDataset(Dataset):
+##################################
+# ----------INPUT-----------------
+# Used if having a tsv file with columns query, context, label, queryid, contextid and label as 0 or 1
+# Used for training a ranking model using BCE loss
+# ----------Dataloader OUTPUT-----------
+# batchify on dataloader gives a tuple of (tokenids, segmentids & attentionmask) each of tensor of BatchSize x Padded_to_Max_Length_In_Batch, label tuple and any additional parameters tuple
+##################################
+class TSVBinaryClassifierRankingDataset(Dataset):
+    def __init__(self, file_path, query_transform, context_transform, delimiter='\t'):
+        self.query_transform = query_transform
+        self.context_transform = context_transform
+        self.data = []
+
+        f = open(file_path, 'r', encoding='utf-8')
+        dictdata = csv.DictReader(f, delimiter=delimiter)
+
+        with tqdm(total=os.path.getsize(file_path)) as pbar:
+            for row in dictdata:
+                pbar.update(len(row))
+                self.data.append(
+                    (row[constants.RANKING_INPUT_QUERY_NAME], row[constants.RANKING_INPUT_DOCUMENT_NAME], int(row[constants.RANKING_INPUT_LABEL_NAME])))
+
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        return self.data[index]
+
+    def batchify(self, batch):
+        query_batch = []
+        contexts_batch = []
+        labels_batch = []
+        for sample in batch:
+            query, context, label = sample
+            query_batch += [query]
+            contexts_batch += [context]
+            labels_batch.append(label)
+        labels_batch = torch.tensor(labels_batch, dtype=torch.float32)
+
+        if self.query_transform is None:
+            return (self.context_transform(list(zip(query_batch,contexts_batch)))), (labels_batch,), ()
+        else:
+            return (*self.query_transform(query_batch), *self.context_transform(contexts_batch)), (labels_batch,), ()
+
+    @classmethod
+    def create_dev_data(cls, file_path, num_dev_queries, num_max_dev_negatives, delimiter = '\t'):
+        dev_corpus = {}
+        dev_queries = set()
+        num_negatives = defaultdict(int)
+        qrels_columns = [constants.RANKING_INPUT_QUERY_ID, constants.RANKING_INPUT_QUERY_NAME,
+                         constants.RANKING_INPUT_DOCUMENT_ID]
+        qrels_list = []
+        f = open(file_path, 'r', encoding='utf-8')
+        dictdata = csv.DictReader(f, delimiter=delimiter)
+
+        with tqdm(total=os.path.getsize(file_path)) as pbar:
+            for row in dictdata:
+                pbar.update(len(row))
+                qid, query, pid, passage, label = row[constants.RANKING_INPUT_QUERY_ID], row[constants.RANKING_INPUT_QUERY_NAME], \
+                                                  row[constants.RANKING_INPUT_DOCUMENT_ID], row[constants.RANKING_INPUT_DOCUMENT_NAME], \
+                                                  int(row[constants.RANKING_INPUT_LABEL_NAME])
+                if len(dev_queries) < num_dev_queries or qid in dev_queries:
+                    if label == 1:
+                        qrels_list.append(dict(zip(qrels_columns, [qid, query, pid])))
+                        dev_queries.add(qid)
+
+                        # Ensure the corpus has the positive
+                        dev_corpus[pid] = ('', passage)
+
+                    if label == 0 and num_negatives[qid] < num_max_dev_negatives:
+                        dev_corpus[pid] = ('', passage)
+                        num_negatives[qid] += 1
+
+            pd.DataFrame(qrels_list).to_json(os.path.join(os.path.dirname(file_path), 'dev-qrels.json'))
+            json.dump(dev_corpus, open(os.path.join(os.path.dirname(file_path), 'dev-collection.json'), 'w'))
+
+
+
+##################################
+# ----------INPUT-----------------
+# Used if having a list of tuples where each tuple is an (id,text)
+# Used during inference to pass through Query & Context Encoders to get model predictions
+# ----------Dataloader OUTPUT-----------
+# batchify on dataloader gives a tuple of (tokenids, segmentids & attentionmask) each of tensor of BatchSize x Padded_to_Max_Length_In_Batch
+##################################
+class TupleQueryOrContextDataset(Dataset):
     def __init__(self, text_list, transform):
         self.text_list = text_list
         self.transform = transform
@@ -30,11 +117,38 @@ class TextSequenceDataset(Dataset):
             text_sequences += [sample]
         return self.transform(text_sequences)
 
-class MultipleNegativeDataset(Dataset):
-    def __init__(self, file_json, query_transform, context_transform, overwrite_cache: bool = False):
+##################################
+# ----------INPUT-----------------
+# Used if having a list of tuples where each tuple is an (qid, pid, query, context, score)
+# Used during inference to pass through Query & Context Encoders to get model predictions
+# ----------Dataloader OUTPUT-----------
+# batchify on dataloader gives a tuple of (tokenids, segmentids & attentionmask) each of tensor of BatchSize x Padded_to_Max_Length_In_Batch
+##################################
+class TupleQueryAndContextDataset(Dataset):
+    def __init__(self, text_list, transform):
+        self.text_list = text_list
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.text_list)
+
+    def __getitem__(self, index):
+        _, _, query, context, _ = self.text_list[index]
+        return query, context
+
+    def batchify(self, batch):
+        text_sequences = []
+        for sample in batch:
+            text_sequences += [sample]
+        return self.transform(text_sequences)
+
+
+class JsonMultipleNegativeDataset(Dataset):
+    def __init__(self, file_json, hard_negatives_weight_factor, query_transform, context_transform, overwrite_cache: bool = False):
         with open(file_json, 'r') as f:
             data = json.load(f)
             self.data_list = list(data.values())
+            self.hard_negatives_weight_factor = hard_negatives_weight_factor
             self.query_transform = query_transform
             self.context_transform = context_transform
 
@@ -55,26 +169,27 @@ class MultipleNegativeDataset(Dataset):
         labels_batch = []
         hard_neg_ctx_indices = []
         for sample in batch:
-            query, contexts =  sample
+            query, contexts = sample
             query_batch += [query]
             hard_negatives_start_idx = 0
             hard_negatives_end_idx = len(contexts)
             current_ctxs_len = len(contexts_batch)
             labels_batch.append(current_ctxs_len)
             hard_neg_ctx_indices.append(
-                    [
-                        i
-                        for i in range(
-                        current_ctxs_len + hard_negatives_start_idx,
-                        current_ctxs_len + hard_negatives_end_idx,
-                    )
-                    ]
+                [
+                    i
+                    for i in range(
+                    current_ctxs_len + hard_negatives_start_idx,
+                    current_ctxs_len + hard_negatives_end_idx,
                 )
+                ]
+            )
             contexts_batch += contexts
         labels_batch = torch.tensor(labels_batch, dtype=torch.long)
-        return (*self.query_transform(query_batch), *self.context_transform(contexts_batch), labels_batch, hard_neg_ctx_indices)
+        return (*self.query_transform(query_batch), *self.context_transform(contexts_batch)), (labels_batch,), (hard_neg_ctx_indices, self.hard_negatives_weight_factor)
 
-#given triples of (query,pos_passage,neg_passage) use this
+
+# given triples of (query,pos_passage,neg_passage) use this
 class TripletDataset(Dataset):
     corpus = {}
     queries = {}
@@ -109,24 +224,24 @@ class TripletDataset(Dataset):
         labels_batch = []
         hard_neg_ctx_indices = []
         for sample in batch:
-            query, contexts =  sample
+            query, contexts = sample
             query_batch += [query]
             hard_negatives_start_idx = 1
             hard_negatives_end_idx = len(contexts)
             current_ctxs_len = len(contexts_batch)
             labels_batch.append(current_ctxs_len)
             hard_neg_ctx_indices.append(
-                    [
-                        i
-                        for i in range(
-                        current_ctxs_len + hard_negatives_start_idx,
-                        current_ctxs_len + hard_negatives_end_idx,
-                    )
-                    ]
+                [
+                    i
+                    for i in range(
+                    current_ctxs_len + hard_negatives_start_idx,
+                    current_ctxs_len + hard_negatives_end_idx,
                 )
+                ]
+            )
             contexts_batch += contexts
         labels_batch = torch.tensor(labels_batch, dtype=torch.long)
-        return (*self.query_transform(query_batch), *self.context_transform(contexts_batch), labels_batch, hard_neg_ctx_indices)
+        return (*self.query_transform(query_batch), *self.context_transform(contexts_batch)), (labels_batch,), (hard_neg_ctx_indices,)
 
 
 ## Given triples of (qid,posid,negid) use this
@@ -173,24 +288,24 @@ class MSMARCOTripletDataset(Dataset):
         labels_batch = []
         hard_neg_ctx_indices = []
         for sample in batch:
-            query, contexts =  sample
+            query, contexts = sample
             query_batch += [query]
             hard_negatives_start_idx = 1
             hard_negatives_end_idx = len(contexts)
             current_ctxs_len = len(contexts_batch)
             labels_batch.append(current_ctxs_len)
             hard_neg_ctx_indices.append(
-                    [
-                        i
-                        for i in range(
-                        current_ctxs_len + hard_negatives_start_idx,
-                        current_ctxs_len + hard_negatives_end_idx,
-                    )
-                    ]
+                [
+                    i
+                    for i in range(
+                    current_ctxs_len + hard_negatives_start_idx,
+                    current_ctxs_len + hard_negatives_end_idx,
                 )
+                ]
+            )
             contexts_batch += contexts
         labels_batch = torch.tensor(labels_batch, dtype=torch.long)
-        return (*self.query_transform(query_batch), *self.context_transform(contexts_batch), labels_batch, hard_neg_ctx_indices)
+        return (*self.query_transform(query_batch), *self.context_transform(contexts_batch)), (labels_batch,), (hard_neg_ctx_indices,)
 
     @classmethod
     def msmarco_create_dev_data_from_triplets(cls, collection_filepath, queries_filepath, triplet_filepath,
@@ -237,7 +352,8 @@ class MSMARCOTripletDataset(Dataset):
         json.dump(dev_corpus, open(os.path.join(os.path.dirname(triplet_filepath), 'dev-collection.json'), 'w'))
 
     @classmethod
-    def msmarco_create_dev_data_from_qrels(cls, collection_filepath, queries_filepath, qrels_filepath, max_passages = -1, sep='\t'):
+    def msmarco_create_dev_data_from_qrels(cls, collection_filepath, queries_filepath, qrels_filepath, max_passages=-1,
+                                           sep='\t'):
         dev_corpus = {}
         dev_queries = {}
         qrels_list = []

@@ -17,9 +17,8 @@ from factory.ir_model_factory import IRModelFactory
 from factory.word_tokenizer_factory import WordTokenizerFactory
 from information_retrieval.ir_model import BiEncoderModel, CrossEncoderModel, get_encoding_vector, SingleEncoderModel
 from information_retrieval.ir_loss import dot_product_scores, BiEncoderNllLoss, BiEncoderBCELoss, TripletLoss
-from information_retrieval.ir_dataset import CombinedInferenceDataset
 from information_retrieval.ir_transform import CombinedRankingTransform, RankingTransform
-from information_retrieval.ir_datasets import TextSequenceDataset
+from information_retrieval.ir_datasets import TupleQueryOrContextDataset, TupleQueryAndContextDataset
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +27,6 @@ def get_ir_model_attributes(model_name_or_path,
                             query_model_name_or_path=None,
                             architecture='cross',
                             projection_dim=0,
-                            do_lower_case=True,
                             device=None):
     if 'bi' in architecture:
         if os.path.exists(os.path.dirname(model_name_or_path)):
@@ -36,13 +34,11 @@ def get_ir_model_attributes(model_name_or_path,
                 os.path.join(model_name_or_path, constants.QUERY_PRE_MODEL_FOLDER))
             query_tokenizer = AutoTokenizer.from_pretrained(
                 os.path.join(model_name_or_path, constants.QUERY_PRE_MODEL_FOLDER),
-                do_lower_case=do_lower_case
             )
             context_config = AutoConfig.from_pretrained(
                 os.path.join(model_name_or_path, constants.PRE_MODEL_FOLDER))
             context_tokenizer = AutoTokenizer.from_pretrained(
                 os.path.join(model_name_or_path, constants.PRE_MODEL_FOLDER),
-                do_lower_case=do_lower_case
             )
             query_pre_model = AutoModel.from_config(query_config)
             context_pre_model = AutoModel.from_config(context_config)
@@ -53,7 +49,6 @@ def get_ir_model_attributes(model_name_or_path,
 
             query_tokenizer = AutoTokenizer.from_pretrained(
                 query_model_name_or_path if query_model_name_or_path else model_name_or_path,
-                do_lower_case=do_lower_case
             )
 
             query_pre_model = AutoModel.from_pretrained(
@@ -62,7 +57,7 @@ def get_ir_model_attributes(model_name_or_path,
             )
 
             context_config = AutoConfig.from_pretrained(model_name_or_path)
-            context_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, do_lower_case=do_lower_case)
+            context_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
             context_pre_model = AutoModel.from_pretrained(
                 model_name_or_path,
                 config=context_config,
@@ -79,14 +74,11 @@ def get_ir_model_attributes(model_name_or_path,
     elif 'cross' in architecture:
         if os.path.exists(os.path.dirname(model_name_or_path)):
             config = AutoConfig.from_pretrained(os.path.join(model_name_or_path, constants.PRE_MODEL_FOLDER))
-            tokenizer = AutoTokenizer.from_pretrained(
-                os.path.join(model_name_or_path, constants.PRE_MODEL_FOLDER),
-                do_lower_case=do_lower_case
-            )
+            tokenizer = AutoTokenizer.from_pretrained(os.path.join(model_name_or_path, constants.PRE_MODEL_FOLDER))
             pre_model = AutoModel.from_config(config)
         else:
             config = AutoConfig.from_pretrained(model_name_or_path)
-            tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, do_lower_case=do_lower_case)
+            tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
             pre_model = AutoModel.from_pretrained(
                 model_name_or_path,
                 config=config,
@@ -99,10 +91,7 @@ def get_ir_model_attributes(model_name_or_path,
     elif 'single' in architecture:
         if os.path.exists(os.path.dirname(model_name_or_path)):
             config = AutoConfig.from_pretrained(os.path.join(model_name_or_path, constants.PRE_MODEL_FOLDER))
-            tokenizer = AutoTokenizer.from_pretrained(
-                os.path.join(model_name_or_path, constants.PRE_MODEL_FOLDER),
-                do_lower_case=do_lower_case
-            )
+            tokenizer = AutoTokenizer.from_pretrained(os.path.join(model_name_or_path, constants.PRE_MODEL_FOLDER))
             pre_model = AutoModel.from_config(config)
         else:
             config = AutoConfig.from_pretrained(model_name_or_path)
@@ -122,36 +111,33 @@ def get_ir_model_attributes(model_name_or_path,
 
 def get_ir_data_transform(architecture: str, tokenizer, query_tokenizer=None, max_query_passage_length=384,
                           max_query_length=32,
-                          max_passage_length=384, bool_np_array=False):
+                          max_passage_length=384):
     query_transform = None
     transform = None
     if 'cross' in architecture:
-        transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=max_query_passage_length,
-                                             bool_np_array=bool_np_array)
+        transform = CombinedRankingTransform(tokenizer=tokenizer, max_len=max_query_passage_length)
     elif 'bi' in architecture:
-        query_transform = RankingTransform(tokenizer=query_tokenizer, max_len=max_query_length,
-                                           bool_np_array=bool_np_array)
-        transform = RankingTransform(tokenizer=tokenizer, max_len=max_passage_length, bool_np_array=bool_np_array)
+        query_transform = RankingTransform(tokenizer=query_tokenizer, max_len=max_query_length)
+        transform = RankingTransform(tokenizer=tokenizer, max_len=max_passage_length)
     elif 'single' in architecture:
-        query_transform = RankingTransform(tokenizer=tokenizer, max_len=max(max_query_length, max_passage_length),
-                                           bool_np_array=bool_np_array)
+        query_transform = RankingTransform(tokenizer=tokenizer, max_len=max(max_query_length, max_passage_length))
         transform = query_transform
     else:
         raise ValueError("Wrong architecture name")
     return transform, query_transform
 
 
-def get_loss_function(loss_name):
+def get_loss_function(loss_name, architecture):
+    loss_function = nn.BCELoss()
     if loss_name == 'BCE':
-        loss_function = nn.BCELoss()
-    elif loss_name == 'BiEncoderNLL':
+        if 'cross' in architecture:
+            loss_function = nn.BCELoss()
+        elif 'bi' in architecture or 'single' in architecture:
+            loss_function = BiEncoderBCELoss()
+    elif loss_name == 'WHNS':
         loss_function = BiEncoderNllLoss()
-    elif loss_name == 'BiEncoderBCE':
-        loss_function = BiEncoderBCELoss()
-    elif loss_name == 'TripletLoss':
+    elif loss_name == 'Triplet':
         loss_function = TripletLoss()
-    else:
-        loss_function = nn.BCELoss()
     return loss_function
 
 def get_context_embeddings(idx_to_doc, context_transform, model, architecture, batch_size, device,
@@ -169,7 +155,7 @@ def get_context_embeddings(idx_to_doc, context_transform, model, architecture, b
             return context_embeddings
 
         logger.info('*************Computing context embeddings*****************\n')
-        context_dataset = TextSequenceDataset(idx_to_doc, context_transform)
+        context_dataset = TupleQueryOrContextDataset(idx_to_doc, context_transform)
         context_dataloader = DataLoader(context_dataset, collate_fn=context_dataset.batchify, batch_size=batch_size)
         if device.type == 'cuda':
             context_model = model.module.context_model if 'bi' in architecture else model.module.model
@@ -276,7 +262,6 @@ def load_ranking_model(model_name_or_path: str, idx_to_doc: List[Tuple[str, str]
             model_name_or_path=model_name_or_path,
             architecture=params.architecture,
             projection_dim=params.projection_dim if 'projection_dim' in vars(params).keys() else None,
-            do_lower_case=params.do_lower_case,
             device=device)
         if hasattr(model, "module"):
             model.module.load_state_dict(
@@ -596,15 +581,17 @@ def predict_bm25(list_query_tuple, model, top_n):
 
 
 def predict_crossencoder(list_query_doc_tuple, model, context_transform, inference_batch_size, device):
-    dataset = CombinedInferenceDataset(list_query_doc_tuple, context_transform)
-    dataloader = DataLoader(dataset, batch_size=inference_batch_size, shuffle=False)
+    dataset = TupleQueryAndContextDataset(list_query_doc_tuple, context_transform)
+    dataloader = DataLoader(dataset, collate_fn=dataset.batchify, batch_size=inference_batch_size, shuffle=False)
     prediction_score_list = []
     model.eval()
-    for step, batch in enumerate(dataloader, start=1):
-        input_batch = tuple(t.to(device) for t in batch)
-        with torch.no_grad():
-            out = model(*input_batch)
-            prediction_score_list.extend(out[0].squeeze().tolist())
+    with tqdm(total=len(dataloader)) as bar:
+        for step, batch in enumerate(dataloader, start=1):
+            bar.update(1)
+            input_batch = tuple(t.to(device) for t in batch)
+            with torch.no_grad():
+                out = model(*input_batch)
+                prediction_score_list.extend(out[0].squeeze().tolist())
     return prediction_score_list
 
 
@@ -636,7 +623,7 @@ def predict_biencoder(list_query_tuple, model, architecture, query_transform, co
                 query_embeddings = query_proj(query_embeddings)
     else:
         # if the input is a list of query tuples with (queryid, query)
-        query_dataset = TextSequenceDataset(list_query_tuple, query_transform)
+        query_dataset = TupleQueryOrContextDataset(list_query_tuple, query_transform)
         query_dataloader = DataLoader(query_dataset, collate_fn=query_dataset.batchify, batch_size=inference_batch_size, shuffle=False)
         logger.info("********Computing Query Embeddings*******************")
         with tqdm(total=len(query_dataloader)) as pbar:
